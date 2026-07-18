@@ -51,7 +51,11 @@
       const data = <?!= mapJson ?>;
       const result = data.result || {};
       document.getElementById('notice').textContent = data.safetyNotice;
-      document.getElementById('meta').textContent = `Generated ${data.generatedAt || ''} · ${result.location_source || 'Location not configured'}`;
+      const locationLabel = result.location_source === 'ZIP Centroid'
+        ? 'Approximate ZIP centroid'
+        : (result.location_source === 'Exact Coordinates' ? 'Exact coordinates' : 'Location not configured');
+      const sourceTimestamp = result.official_data_refreshed_at || 'No successful official refresh';
+      document.getElementById('meta').textContent = `Generated ${data.generatedAt || ''} · Official snapshot ${sourceTimestamp} · TAHC / USDA`;
       document.getElementById('zone').textContent = result.official_zone_status || 'Unknown';
       document.getElementById('attention').textContent = result.operational_attention || 'Data Unavailable';
       document.getElementById('location').textContent = [result.city, result.county, result.state, result.zip].filter(Boolean).join(', ') || 'Not configured';
@@ -72,9 +76,28 @@
       drawRanch();
 
       function bounds(list) {
-        if (!list.length) return { minX: -100, maxX: -96, minY: 26, maxY: 30 };
-        let xs = list.map(p => Number(p[0])).filter(Number.isFinite);
-        let ys = list.map(p => Number(p[1])).filter(Number.isFinite);
+        const valid = list.filter(p =>
+          Array.isArray(p) &&
+          Number.isFinite(Number(p[0])) &&
+          Number.isFinite(Number(p[1]))
+        );
+        if (!valid.length) return { minX: -100, maxX: -96, minY: 26, maxY: 30 };
+        if (Number.isFinite(result.latitude) && Number.isFinite(result.longitude)) {
+          const local = valid.filter(p =>
+            Math.abs(Number(p[0]) - result.longitude) <= 3 &&
+            Math.abs(Number(p[1]) - result.latitude) <= 3
+          );
+          const halfX = Math.max(.8, ...local.map(p => Math.abs(Number(p[0]) - result.longitude) * 1.15));
+          const halfY = Math.max(.5, ...local.map(p => Math.abs(Number(p[1]) - result.latitude) * 1.15));
+          return {
+            minX: result.longitude - halfX,
+            maxX: result.longitude + halfX,
+            minY: result.latitude - halfY,
+            maxY: result.latitude + halfY
+          };
+        }
+        let xs = valid.map(p => Number(p[0]));
+        let ys = valid.map(p => Number(p[1]));
         let minX = Math.min(...xs), maxX = Math.max(...xs), minY = Math.min(...ys), maxY = Math.max(...ys);
         const padX = Math.max((maxX - minX) * .2, .25);
         const padY = Math.max((maxY - minY) * .2, .25);
@@ -105,13 +128,14 @@
         if (!geom || !geom.coordinates) return;
         const polygons = geom.type === 'MultiPolygon' ? geom.coordinates : [geom.coordinates];
         polygons.forEach(poly => {
-          const ring = poly[0] || [];
-          const d = ring.map((p, i) => {
-            const xy = project(p);
-            return `${i ? 'L' : 'M'}${xy[0].toFixed(1)},${xy[1].toFixed(1)}`;
-          }).join(' ') + ' Z';
+          const d = (poly || []).map(ring =>
+            ring.map((p, i) => {
+              const xy = project(p);
+              return `${i ? 'L' : 'M'}${xy[0].toFixed(1)},${xy[1].toFixed(1)}`;
+            }).join(' ') + ' Z'
+          ).join(' ');
           const infested = /infested/i.test(zone.type || '');
-          make('path', { d, fill: infested ? '#ef444455' : '#f59e0b55', stroke: infested ? '#dc2626' : '#d97706', 'stroke-width': 2 });
+          make('path', { d, fill: infested ? '#ef444455' : '#f59e0b55', 'fill-rule': 'evenodd', stroke: infested ? '#dc2626' : '#d97706', 'stroke-width': 2 });
         });
       }
       function drawCase(c) {
@@ -126,7 +150,7 @@
         }
         const xy = project([result.longitude, result.latitude]);
         make('circle', { cx: xy[0], cy: xy[1], r: 9, fill: '#0f766e', stroke: 'white', 'stroke-width': 3 });
-        make('text', { x: xy[0] + 12, y: xy[1] - 10, fill: '#064e3b', 'font-size': 13, 'font-weight': 700 }).textContent = result.location_source || 'Ranch location';
+        make('text', { x: xy[0] + 12, y: xy[1] - 10, fill: '#064e3b', 'font-size': 13, 'font-weight': 700 }).textContent = locationLabel;
       }
     </script>
   </body>

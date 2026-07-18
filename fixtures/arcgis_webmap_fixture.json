@@ -1,16 +1,18 @@
 {
   "operationalLayers": [
     {
-      "id": "fixture-zones",
-      "title": "NWS Infested and Surveillance Zones",
-      "url": "https://services.arcgis.com/example/ArcGIS/rest/services/NWS_Zones/FeatureServer/0",
-      "layerType": "ArcGISFeatureLayer"
+      "id": "fixture-surveillance",
+      "title": "New World Screwworm Adjacent Surveillance Zone",
+      "url": "https://services1.arcgis.com/example/ArcGIS/rest/services/NWS_Zones/FeatureServer/33",
+      "layerType": "ArcGISFeatureLayer",
+      "layerDefinition": { "definitionExpression": "zone_name = 2" }
     },
     {
-      "id": "fixture-cases",
-      "title": "Confirmed Animal Cases",
-      "url": "https://services.arcgis.com/example/ArcGIS/rest/services/NWS_Cases/FeatureServer/0",
-      "layerType": "ArcGISFeatureLayer"
+      "id": "fixture-infested",
+      "title": "New World Screwworm Infested Zones",
+      "url": "https://services1.arcgis.com/example/ArcGIS/rest/services/NWS_Zones/FeatureServer/33",
+      "layerType": "ArcGISFeatureLayer",
+      "layerDefinition": { "definitionExpression": "zone_name = 1" }
     }
   ]
 }

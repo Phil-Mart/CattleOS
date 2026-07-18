@@ -77,20 +77,20 @@ function settings_set(key, value, options) {
   if (!row) {
     sheet.appendRow([
       key,
-      value == null ? '' : value,
+      cattle_safeCellValue_(value == null ? '' : value),
       options.editable === false ? 'FALSE' : 'TRUE',
-      options.purpose || '',
+      cattle_safeCellValue_(options.purpose || ''),
       cattle_nowIso_()
     ]);
     return;
   }
-  sheet.getRange(row, valueColumn).setValue(value == null ? '' : value);
+  sheet.getRange(row, valueColumn).setValue(cattle_safeCellValue_(value == null ? '' : value));
   if (updatedColumn) sheet.getRange(row, updatedColumn).setValue(cattle_nowIso_());
   if (Object.prototype.hasOwnProperty.call(options, 'editable') && editableColumn) {
     sheet.getRange(row, editableColumn).setValue(options.editable ? 'TRUE' : 'FALSE');
   }
   if (options.purpose && purposeColumn) {
-    sheet.getRange(row, purposeColumn).setValue(options.purpose);
+    sheet.getRange(row, purposeColumn).setValue(cattle_safeCellValue_(options.purpose));
   }
 }
 

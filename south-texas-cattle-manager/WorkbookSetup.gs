@@ -20,7 +20,7 @@ function setup_initializeWorkbook(options) {
 
 function setup_ensureWorkbookStructure_() {
   CATTLEOS.SYSTEM_SHEETS.forEach(function(sheetName) {
-    var sheet = cattle_ensureHeaders_(sheetName);
+    var sheet = setup_ensureSheetStructure_(sheetName);
     if (CATTLEOS.HIDDEN_SHEETS.indexOf(sheetName) !== -1) {
       try {
         sheet.hideSheet();
@@ -29,6 +29,13 @@ function setup_ensureWorkbookStructure_() {
       }
     }
   });
+}
+
+function setup_ensureSheetStructure_(sheetName) {
+  if (sheetName === CATTLEOS.DASHBOARD_SHEET || sheetName === CATTLEOS.WATCH_SHEET) {
+    return cattle_getOrCreateSheet_(sheetName);
+  }
+  return cattle_ensureHeaders_(sheetName);
 }
 
 function setup_orderSheets_() {
@@ -105,24 +112,46 @@ function setup_saveOnboarding(form) {
     setup_ensureWorkbookStructure_();
     settings_ensureDefaults();
     form = form || {};
-    if (form.ranchName) settings_set('Ranch_Name', form.ranchName);
-    if (form.ownerName) settings_set('Owner_Name', form.ownerName);
-    if (form.acres) settings_set('Acres', form.acres);
-    if (form.latitude !== '' && form.latitude != null) settings_set('Ranch_Latitude', form.latitude);
-    if (form.longitude !== '' && form.longitude != null) settings_set('Ranch_Longitude', form.longitude);
+    var ranchName = cattle_normalizeText_(form.ranchName);
+    var acres = cattle_toNumber_(form.acres, null);
+    if (!ranchName) throw new Error('Ranch name is required.');
+    if (acres === null || acres <= 0) throw new Error('Acres must be a number greater than zero.');
+    var exactCoordinates = loc_validateExactCoordinates_(form.latitude, form.longitude);
     var location = loc_geocodeZip(form.zip);
-    if (form.latitude !== '' && form.longitude !== '' && form.latitude != null && form.longitude != null) {
-      location.latitude = Number(form.latitude);
-      location.longitude = Number(form.longitude);
+    if (exactCoordinates.provided) {
+      location.latitude = exactCoordinates.latitude;
+      location.longitude = exactCoordinates.longitude;
       location.location_source = 'Exact Coordinates';
       location.location_precision = 'Exact coordinates supplied by user';
+      try {
+        var reverse = loc_reverseGeocode(exactCoordinates.latitude, exactCoordinates.longitude);
+        location.city = reverse.city || location.city;
+        location.county = reverse.county || location.county;
+        location.state = reverse.state || location.state;
+      } catch (reverseErr) {
+        audit_log('WARN', 'ONBOARDING_REVERSE_GEOCODE_FAILED', 'Exact coordinates were saved, but reverse geocoding failed.', {
+          error: reverseErr.message
+        });
+      }
     }
+    settings_set('Ranch_Name', ranchName);
+    settings_set('Owner_Name', cattle_normalizeText_(form.ownerName));
+    settings_set('Acres', acres);
     loc_saveRanchLocation(location);
     if (settings_getBool('NWS_Enable_Live_Data', true)) {
       try {
-        nws_refreshOfficialData();
+        nws_refreshOfficialDataUnlocked_();
       } catch (err) {
         audit_log('WARN', 'ONBOARDING_REFRESH_FAILED', 'Official-data refresh failed during onboarding.', { error: err.message });
+      }
+    }
+    if (settings_getBool('NWS_Auto_Refresh', true)) {
+      try {
+        nws_installRefreshTrigger();
+      } catch (triggerErr) {
+        audit_log('WARN', 'ONBOARDING_TRIGGER_FAILED', 'Automatic NWS refresh could not be installed.', {
+          error: triggerErr.message
+        });
       }
     }
     nws_refreshDashboard();

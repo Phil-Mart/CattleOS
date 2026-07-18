@@ -1,16 +1,22 @@
 {
   "fields": [
-    { "name": "ZONECATEGORY", "alias": "Zone Type" },
-    { "name": "CountyName", "alias": "County Name" },
-    { "name": "StartDate", "alias": "Effective Date" }
+    {
+      "name": "zone_name",
+      "alias": "Zone name",
+      "domain": {
+        "type": "codedValue",
+        "codedValues": [
+          { "name": "Infested Zone", "code": 1 },
+          { "name": "Adjacent Surveillance Zone", "code": 2 }
+        ]
+      }
+    }
   ],
   "features": [
     {
       "attributes": {
         "OBJECTID": 1,
-        "ZONECATEGORY": "Infested",
-        "CountyName": "Fixture County",
-        "StartDate": "2026-07-18"
+        "zone_name": 1
       },
       "geometry": {
         "rings": [[[-99, 28], [-98, 28], [-98, 29], [-99, 29], [-99, 28]]]

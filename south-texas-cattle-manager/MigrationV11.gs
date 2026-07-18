@@ -11,7 +11,7 @@ function migration_runV11(options) {
     var preservedCounty = settings_get('County', '');
     CATTLEOS.SYSTEM_SHEETS.forEach(function(sheetName) {
       var existed = !!cattle_getSheet_(sheetName);
-      cattle_ensureHeaders_(sheetName);
+      setup_ensureSheetStructure_(sheetName);
       migration_logAction_((existed ? 'Verified sheet ' : 'Created sheet ') + sheetName, {});
     });
     settings_ensureDefaults();

@@ -12,6 +12,7 @@ function contest_loadNwsDemoScenario() {
     setup_protectSystemSheets_();
     setup_orderSheets_();
     contest_clearNwsDemoScenario(true);
+    contest_storePreDemoSettings_();
     settings_set('Contest_Demo_Mode', true);
     settings_set('OpenAI_Mock_Mode', true);
     settings_set('NWS_Data_Health', 'Demo', { editable: false });
@@ -51,15 +52,26 @@ function contest_clearNwsDemoScenario(force) {
     var response = ui.alert('Clear Demo Data', 'Remove rows labeled Data_Mode = Demo and turn off Contest_Demo_Mode? User-entered non-demo rows are preserved.', ui.ButtonSet.YES_NO);
     if (response !== ui.Button.YES) return false;
   }
-  ['Herd', 'Health', 'Inspections', 'Feed_Forage', 'Tasks', 'Alerts', 'NWS_Official_Zones', 'NWS_Official_Cases'].forEach(function(sheetName) {
+  var wasDemo = settings_getBool('Contest_Demo_Mode', false);
+  ['Herd', 'Breeding', 'Calves', 'Measurements', 'Health', 'Inspections', 'Expenses', 'Sales_Harvest', 'Feed_Forage', 'Pastures', 'Tasks', 'Alerts', 'NWS_Official_Zones', 'NWS_Official_Cases', 'NWS_Data_Status', 'Ranch_Brief_Log'].forEach(function(sheetName) {
     contest_deleteRowsWhere_(sheetName, function(row) {
-      return row.Data_Mode === 'Demo';
+      return row.Data_Mode === 'Demo' ||
+        (sheetName === 'Calves' && (row.Calf_ID === 'DEMO-CALF-1' || row.Source_Record_ID === 'DEMO_CALF_1'));
     });
   });
+  var restored = contest_restorePreDemoSettings_();
   settings_set('Contest_Demo_Mode', false);
-  settings_set('NWS_Data_Health', 'Not Initialized', { editable: false });
-  settings_set('NWS_Last_Risk_JSON', '', { editable: false });
+  if (wasDemo && !restored) {
+    settings_set('Ranch_Name', '');
+    settings_set('Acres', '');
+    settings_set('Ranch_ZIP', '');
+    loc_clearResolvedLocation();
+    settings_set('NWS_Data_Health', 'Not Initialized', { editable: false });
+    settings_set('NWS_Last_Risk_JSON', '', { editable: false });
+  }
+  settings_syncZipToWatch_(settings_get('Ranch_ZIP', ''));
   audit_log('INFO', 'CLEAR_DEMO_DATA', 'Contest demo rows cleared.', {});
+  if (force !== true) nws_refreshDashboard();
   return true;
 }
 
@@ -168,7 +180,8 @@ function contest_seedHerdDemo_() {
     Birth_Weight: '',
     Status: 'Active',
     Notes: 'DEMO recent birth for navel inspection priority.',
-    Source_Record_ID: 'DEMO_CALF_1'
+    Source_Record_ID: 'DEMO_CALF_1',
+    Data_Mode: 'Demo'
   });
 }
 
@@ -227,4 +240,49 @@ function contest_deleteRowsWhere_(sheetName, predicate) {
     }
   }
   return deleted;
+}
+
+function contest_storePreDemoSettings_() {
+  var keys = [
+    'Ranch_Name',
+    'Owner_Name',
+    'Acres',
+    'County',
+    'Ranch_ZIP',
+    'Resolved_City',
+    'Resolved_County',
+    'Resolved_State',
+    'Ranch_Latitude',
+    'Ranch_Longitude',
+    'Resolved_Latitude',
+    'Resolved_Longitude',
+    'Location_Source',
+    'Location_Resolved_At',
+    'NWS_Last_Successful_Refresh',
+    'NWS_Last_Source_Modified',
+    'NWS_Data_Health',
+    'NWS_Last_Risk_JSON',
+    'OpenAI_Mock_Mode'
+  ];
+  var snapshot = {};
+  keys.forEach(function(key) {
+    snapshot[key] = settings_get(key, '');
+  });
+  PropertiesService.getDocumentProperties().setProperty('CATTLEOS_PRE_DEMO_SETTINGS', cattle_json_(snapshot));
+}
+
+function contest_restorePreDemoSettings_() {
+  var properties = PropertiesService.getDocumentProperties();
+  var raw = properties.getProperty('CATTLEOS_PRE_DEMO_SETTINGS');
+  if (!raw) return false;
+  var snapshot = cattle_parseJsonSafe_(raw, null);
+  if (!snapshot || typeof snapshot !== 'object') {
+    properties.deleteProperty('CATTLEOS_PRE_DEMO_SETTINGS');
+    return false;
+  }
+  Object.keys(snapshot).forEach(function(key) {
+    settings_set(key, snapshot[key]);
+  });
+  properties.deleteProperty('CATTLEOS_PRE_DEMO_SETTINGS');
+  return true;
 }

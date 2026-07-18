@@ -20,6 +20,22 @@ function loc_validateZip(zip) {
   return { valid: true, zip: normalized, error: '' };
 }
 
+function loc_validateExactCoordinates_(latitude, longitude) {
+  var latBlank = latitude === null || latitude === undefined || String(latitude).trim() === '';
+  var lngBlank = longitude === null || longitude === undefined || String(longitude).trim() === '';
+  if (latBlank && lngBlank) return { provided: false, latitude: null, longitude: null };
+  if (latBlank || lngBlank) throw new Error('Enter both exact latitude and exact longitude, or leave both blank.');
+  var lat = Number(latitude);
+  var lng = Number(longitude);
+  if (!isFinite(lat) || lat < -90 || lat > 90) {
+    throw new Error('Exact latitude must be a number from -90 to 90.');
+  }
+  if (!isFinite(lng) || lng < -180 || lng > 180) {
+    throw new Error('Exact longitude must be a number from -180 to 180.');
+  }
+  return { provided: true, latitude: lat, longitude: lng };
+}
+
 function loc_geocodeZip(zip, geocoderResponseOverride) {
   var validation = loc_validateZip(zip);
   if (!validation.valid) throw new Error(validation.error);
@@ -42,8 +58,9 @@ function loc_geocodeZip(zip, geocoderResponseOverride) {
 }
 
 function loc_reverseGeocode(lat, lng, geocoderResponseOverride) {
-  if (!isFinite(Number(lat)) || !isFinite(Number(lng))) throw new Error('Latitude and longitude are required for reverse geocoding.');
-  var response = geocoderResponseOverride || Maps.newGeocoder().reverseGeocode(Number(lat), Number(lng));
+  var coordinates = loc_validateExactCoordinates_(lat, lng);
+  if (!coordinates.provided) throw new Error('Latitude and longitude are required for reverse geocoding.');
+  var response = geocoderResponseOverride || Maps.newGeocoder().reverseGeocode(coordinates.latitude, coordinates.longitude);
   var results = response && response.results ? response.results : [];
   if (!results.length) return {};
   return loc_parseGeocodeResult_(results[0], '');
@@ -54,17 +71,20 @@ function loc_getRanchLocation() {
   var zip = loc_normalizeZip(settings_get('Ranch_ZIP'));
   var lat = settings_get('Ranch_Latitude');
   var lng = settings_get('Ranch_Longitude');
-  var exactLat = cattle_toNumber_(lat, null);
-  var exactLng = cattle_toNumber_(lng, null);
-  var hasExact = exactLat !== null && exactLng !== null && Math.abs(exactLat) <= 90 && Math.abs(exactLng) <= 180;
+  var exactPoint = risk_normalizePoint_({ latitude: lat, longitude: lng });
+  var resolvedPoint = risk_normalizePoint_({
+    latitude: settings_get('Resolved_Latitude'),
+    longitude: settings_get('Resolved_Longitude')
+  });
+  var hasExact = exactPoint.valid;
   var storedSource = cattle_normalizeText_(settings_get('Location_Source'));
   return {
     zip: zip,
     city: cattle_normalizeText_(settings_get('Resolved_City')),
     county: cattle_normalizeText_(settings_get('Resolved_County')),
     state: cattle_normalizeText_(settings_get('Resolved_State')),
-    latitude: hasExact ? exactLat : cattle_toNumber_(settings_get('Resolved_Latitude'), null),
-    longitude: hasExact ? exactLng : cattle_toNumber_(settings_get('Resolved_Longitude'), null),
+    latitude: hasExact ? exactPoint.lat : (resolvedPoint.valid ? resolvedPoint.lat : null),
+    longitude: hasExact ? exactPoint.lng : (resolvedPoint.valid ? resolvedPoint.lng : null),
     location_source: hasExact ? 'Exact Coordinates' : (storedSource === 'Exact Coordinates' ? (zip ? 'ZIP Centroid' : '') : (storedSource || (zip ? 'ZIP Centroid' : ''))),
     location_precision: hasExact ? 'Exact coordinates supplied by user' : 'Approximate',
     resolved_at: settings_get('Location_Resolved_At') || ''
@@ -75,20 +95,23 @@ function loc_saveRanchLocation(location) {
   if (!location) throw new Error('Location is required.');
   var zipValidation = loc_validateZip(location.zip);
   if (!zipValidation.valid) throw new Error(zipValidation.error);
-  if (!isFinite(Number(location.latitude)) || !isFinite(Number(location.longitude))) {
-    throw new Error('Location must include valid latitude and longitude.');
-  }
+  var coordinates = loc_validateExactCoordinates_(location.latitude, location.longitude);
+  if (!coordinates.provided) throw new Error('Location must include valid latitude and longitude.');
+  var source = location.location_source === 'Exact Coordinates' ? 'Exact Coordinates' : 'ZIP Centroid';
   settings_set('Ranch_ZIP', zipValidation.zip);
   settings_set('Resolved_City', location.city || '', { editable: false });
   settings_set('Resolved_County', location.county || '', { editable: false });
   settings_set('Resolved_State', location.state || '', { editable: false });
-  settings_set('Resolved_Latitude', location.latitude, { editable: false });
-  settings_set('Resolved_Longitude', location.longitude, { editable: false });
-  if ((location.location_source || 'ZIP Centroid') === 'Exact Coordinates') {
-    settings_set('Ranch_Latitude', location.latitude);
-    settings_set('Ranch_Longitude', location.longitude);
+  settings_set('Resolved_Latitude', coordinates.latitude, { editable: false });
+  settings_set('Resolved_Longitude', coordinates.longitude, { editable: false });
+  if (source === 'Exact Coordinates') {
+    settings_set('Ranch_Latitude', coordinates.latitude);
+    settings_set('Ranch_Longitude', coordinates.longitude);
+  } else {
+    settings_set('Ranch_Latitude', '');
+    settings_set('Ranch_Longitude', '');
   }
-  settings_set('Location_Source', location.location_source || 'ZIP Centroid', { editable: false });
+  settings_set('Location_Source', source, { editable: false });
   settings_set('Location_Resolved_At', location.resolved_at || cattle_nowIso_(), { editable: false });
   settings_syncZipToWatch_(zipValidation.zip);
   audit_log('INFO', 'SAVE_LOCATION', 'Ranch location saved.', {
@@ -100,22 +123,39 @@ function loc_saveRanchLocation(location) {
   });
 }
 
-function loc_clearResolvedLocation() {
-  ['Resolved_City', 'Resolved_County', 'Resolved_State', 'Resolved_Latitude', 'Resolved_Longitude', 'Ranch_Latitude', 'Ranch_Longitude', 'Location_Source', 'Location_Resolved_At', 'NWS_Last_Risk_JSON'].forEach(function(key) {
+function loc_clearResolvedLocation(options) {
+  options = options || {};
+  var keys = ['Resolved_City', 'Resolved_County', 'Resolved_State', 'Resolved_Latitude', 'Resolved_Longitude', 'Location_Resolved_At', 'NWS_Last_Risk_JSON'];
+  if (!options.preserveExact) {
+    keys = keys.concat(['Ranch_Latitude', 'Ranch_Longitude', 'Location_Source']);
+  }
+  keys.forEach(function(key) {
     settings_set(key, '');
   });
-  audit_log('INFO', 'CLEAR_LOCATION', 'Resolved ranch location cleared.', {});
+  audit_log('INFO', 'CLEAR_LOCATION', 'Resolved ranch location cleared.', { preserveExact: !!options.preserveExact });
 }
 
 function loc_updateFromZip(zip) {
   var location = loc_geocodeZip(zip);
-  var existingLat = cattle_toNumber_(settings_get('Ranch_Latitude'), null);
-  var existingLng = cattle_toNumber_(settings_get('Ranch_Longitude'), null);
-  if (existingLat !== null && existingLng !== null && String(settings_get('Location_Source')) === 'Exact Coordinates') {
-    location.latitude = existingLat;
-    location.longitude = existingLng;
+  var exactPoint = risk_normalizePoint_({
+    latitude: settings_get('Ranch_Latitude'),
+    longitude: settings_get('Ranch_Longitude')
+  });
+  if (exactPoint.valid && String(settings_get('Location_Source')) === 'Exact Coordinates') {
+    location.latitude = exactPoint.lat;
+    location.longitude = exactPoint.lng;
     location.location_source = 'Exact Coordinates';
     location.location_precision = 'Exact coordinates supplied by user';
+    try {
+      var reverse = loc_reverseGeocode(exactPoint.lat, exactPoint.lng);
+      location.city = reverse.city || location.city;
+      location.county = reverse.county || location.county;
+      location.state = reverse.state || location.state;
+    } catch (err) {
+      audit_log('WARN', 'EXACT_COORDINATE_REVERSE_GEOCODE_FAILED', 'Exact coordinates were retained, but reverse geocoding failed.', {
+        error: err.message
+      });
+    }
   }
   loc_saveRanchLocation(location);
   return location;
@@ -127,7 +167,7 @@ function loc_pickBestGeocodeResult_(response, zip) {
   for (var i = 0; i < results.length; i++) {
     var result = results[i];
     var parsed = loc_parseGeocodeResult_(result, zip);
-    if (!parsed.latitude || !parsed.longitude || parsed.country !== 'US') continue;
+    if (!risk_normalizePoint_({ latitude: parsed.latitude, longitude: parsed.longitude }).valid || String(parsed.country).toUpperCase() !== 'US') continue;
     if (parsed.postal_code === zip) return result;
     if (!fallback) fallback = result;
   }
@@ -143,6 +183,8 @@ function loc_parseGeocodeResult_(result, requestedZip) {
     });
   });
   var location = result && result.geometry && result.geometry.location ? result.geometry.location : {};
+  var latitude = location.lat === null || location.lat === undefined || location.lat === '' ? null : Number(location.lat);
+  var longitude = location.lng === null || location.lng === undefined || location.lng === '' ? null : Number(location.lng);
   return {
     zip: requestedZip || loc_componentShort_(byType.postal_code),
     city: loc_componentLong_(byType.locality) || loc_componentLong_(byType.postal_town) || loc_componentLong_(byType.sublocality) || loc_componentLong_(byType.administrative_area_level_3),
@@ -150,8 +192,8 @@ function loc_parseGeocodeResult_(result, requestedZip) {
     state: loc_componentShort_(byType.administrative_area_level_1),
     country: loc_componentShort_(byType.country),
     postal_code: loc_componentShort_(byType.postal_code),
-    latitude: Number(location.lat),
-    longitude: Number(location.lng),
+    latitude: latitude,
+    longitude: longitude,
     formatted_address: result && result.formatted_address ? result.formatted_address : ''
   };
 }

@@ -23,6 +23,8 @@ function openai_clearApiKey_() {
 function openai_callResponses_(payload) {
   var apiKey = openai_getApiKey_();
   if (!apiKey) throw new Error('OpenAI API key is not configured.');
+  payload = payload || {};
+  payload.store = false;
   var response = UrlFetchApp.fetch(CATTLEOS.OPENAI_RESPONSES_URL, {
     method: 'post',
     contentType: 'application/json',
@@ -38,18 +40,36 @@ function openai_callResponses_(payload) {
     var parsedError = cattle_parseJsonSafe_(text, {});
     throw new Error('OpenAI Responses API returned HTTP ' + code + ': ' + (parsedError.error && parsedError.error.message ? parsedError.error.message : text.slice(0, 240)));
   }
-  return cattle_parseJsonSafe_(text, {});
+  var parsed = cattle_parseJsonSafe_(text, null);
+  if (!parsed || typeof parsed !== 'object') {
+    throw new Error('OpenAI Responses API returned malformed JSON.');
+  }
+  if (parsed.error) {
+    throw new Error('OpenAI Responses API error: ' + (parsed.error.message || cattle_json_(parsed.error).slice(0, 240)));
+  }
+  if (parsed.status && parsed.status !== 'completed') {
+    var reason = parsed.incomplete_details && parsed.incomplete_details.reason
+      ? ': ' + parsed.incomplete_details.reason
+      : '';
+    throw new Error('OpenAI response did not complete (' + parsed.status + ')' + reason + '.');
+  }
+  return parsed;
 }
 
 function openai_extractResponseText_(response) {
   if (!response) return '';
-  if (response.output_text) return response.output_text;
+  if (typeof response.output_text === 'string' && response.output_text.trim()) return response.output_text.trim();
   var chunks = [];
+  var refusals = [];
   (response.output || []).forEach(function(output) {
     (output.content || []).forEach(function(content) {
-      if (content.text) chunks.push(content.text);
+      if (content.type === 'refusal' && content.refusal) refusals.push(content.refusal);
       if (content.type === 'output_text' && content.text) chunks.push(content.text);
+      else if (content.text) chunks.push(content.text);
     });
   });
+  if (!chunks.length && refusals.length) {
+    throw new Error('OpenAI declined to produce the Ranch Brief: ' + refusals.join(' ').slice(0, 240));
+  }
   return chunks.join('\n').trim();
 }

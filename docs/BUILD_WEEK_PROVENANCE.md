@@ -6,7 +6,7 @@
 - Prior requirements and schemas implied by the missing `South_Texas_Cattle_Manager_Codex_Project_Spec.md`.
 - The original Version 1.0 source/spec was not available in this workspace when Codex started.
 
-## Work Completed During Build Week With Codex/GPT-5.6
+## Work Completed During Build Week With Codex
 
 - Baseline CattleOS Google Sheets workbook scaffolding.
 - Version 1.1 migration and setup/repair workflow.
@@ -33,11 +33,11 @@
 
 ## Codex Session
 
-Primary Codex thread: this thread.
+Primary Codex task/thread ID: `019f7688-dc03-7673-a561-c14b1915c4cc`
 
-`/feedback` Session ID: `TODO_AFTER_RUNNING_FEEDBACK`
+The repository verifies the product's `gpt-5.6-sol` Responses API integration. It does not contain reliable metadata proving which Codex agent model produced each code change, so no agent-model claim is made here.
 
-Run `/feedback` in the primary Codex task where most core functionality was built, then replace the placeholder above.
+`/feedback` Session ID: not yet recorded. This is separate from the Codex task/thread ID above. Run `/feedback` in the primary Codex task and record the ID returned by that command if a contest submission requires it.
 
 ## Baseline Note
 

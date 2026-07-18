@@ -20,6 +20,7 @@ function brief_testOpenAiConnection() {
   var model = settings_get('OpenAI_Model', 'gpt-5.6-sol');
   var payload = {
     model: model,
+    max_output_tokens: 1000,
     input: [
       { role: 'user', content: [{ type: 'input_text', text: 'Return exactly {"ok":true} as JSON.' }] }
     ],
@@ -57,25 +58,28 @@ function brief_buildGroundedInput() {
   allow('SYSTEM:DATA_HEALTH');
 
   var maxAnimals = Math.max(1, settings_getNumber('Ranch_Brief_Max_Animals', 20));
-  var herdRows = cattle_sheetRowsAsObjects_('Herd').slice(0, maxAnimals).map(function(row) {
-    var id = row.Source_Record_ID || row.Animal_ID;
+  var herdRows = cattle_sheetRowsForCurrentMode_('Herd').filter(function(row) {
+    return !/sold|deceased|culled|harvested|inactive/i.test(String(row.Status || ''));
+  }).slice(0, maxAnimals).map(function(row) {
+    var id = brief_sourceId_(row, 'HERD', row.Source_Record_ID || row.Animal_ID);
     allow(id);
     return {
-      animal_id: row.Animal_ID,
+      animal_id: String(row.Animal_ID || ''),
       status: row.Status,
       sex: row.Sex,
       pasture: row.Pasture,
       source_record_id: id
     };
   });
-  var openWounds = cattle_sheetRowsAsObjects_('Health').filter(function(row) {
+  var allOpenWounds = cattle_sheetRowsForCurrentMode_('Health').filter(function(row) {
     return /open|unresolved|draining|enlarging|foul|screwworm suspected/i.test([row.Wound_Status, row.Event_Type].join(' ')) &&
       !cattle_toBool_(row.Resolved, false);
-  }).slice(0, maxAnimals).map(function(row) {
-    var id = row.Source_Record_ID || row.Health_ID;
+  });
+  var openWounds = allOpenWounds.slice(0, maxAnimals).map(function(row) {
+    var id = brief_sourceId_(row, 'HEALTH', row.Source_Record_ID || row.Health_ID);
     allow(id);
     return {
-      animal_id: row.Animal_ID,
+      animal_id: String(row.Animal_ID || ''),
       event_date: row.Event_Date,
       event_type: row.Event_Type,
       wound_status: row.Wound_Status,
@@ -83,22 +87,29 @@ function brief_buildGroundedInput() {
       source_record_id: id
     };
   });
-  var inspections = cattle_sheetRowsAsObjects_('Inspections').slice(-20).map(function(row) {
-    var id = row.Source_Record_ID || row.Inspection_ID;
+  var suspectedById = {};
+  allOpenWounds.filter(function(row) {
+    return /screwworm suspected/i.test(String(row.Event_Type || ''));
+  }).forEach(function(row) {
+    suspectedById[brief_sourceId_(row, 'HEALTH', row.Source_Record_ID || row.Health_ID)] = true;
+  });
+  var inspections = cattle_sheetRowsForCurrentMode_('Inspections').slice(-20).map(function(row) {
+    var id = brief_sourceId_(row, 'INSPECTION', row.Source_Record_ID || row.Inspection_ID);
     allow(id);
+    if (Number(row.Suspicious_Larvae_Count || 0) > 0) suspectedById[id] = true;
     return {
       inspection_date: row.Inspection_Date,
       scope: row.Scope,
-      scope_id: row.Scope_ID,
+      scope_id: String(row.Scope_ID || ''),
       suspicious_larvae_count: row.Suspicious_Larvae_Count,
       follow_up_due: row.Follow_Up_Due,
       source_record_id: id
     };
   });
-  var alerts = cattle_sheetRowsAsObjects_('Alerts').filter(function(row) {
+  var alerts = cattle_sheetRowsForCurrentMode_('Alerts').filter(function(row) {
     return !/closed|resolved/i.test(String(row.Status || ''));
   }).slice(0, 20).map(function(row) {
-    var id = row.Source_Record_ID || row.Alert_ID;
+    var id = brief_sourceId_(row, 'ALERT', row.Source_Record_ID || row.Alert_ID);
     allow(id);
     return {
       severity: row.Severity,
@@ -106,23 +117,23 @@ function brief_buildGroundedInput() {
       source_record_id: id
     };
   });
-  var tasks = cattle_sheetRowsAsObjects_('Tasks').filter(function(row) {
+  var tasks = cattle_sheetRowsForCurrentMode_('Tasks').filter(function(row) {
     return !/complete|closed|done|cancel/i.test(String(row.Status || ''));
   }).slice(0, 30).map(function(row) {
-    var id = row.Source_Record_ID || row.Task_ID;
+    var id = brief_sourceId_(row, 'TASK', row.Source_Record_ID || row.Task_ID);
     allow(id);
     return {
       task_type: row.Task_Type,
       scope: row.Scope,
-      scope_id: row.Scope_ID,
+      scope_id: String(row.Scope_ID || ''),
       due_date: row.Due_Date,
       priority: row.Priority,
-      reason: row.Reason,
+      reason: suspectedById[String(id)] ? 'Suspected finding follow-up; observation text withheld from OpenAI input.' : row.Reason,
       source_record_id: id
     };
   });
-  var feed = cattle_sheetRowsAsObjects_('Feed_Forage').slice(-15).map(function(row) {
-    var id = row.Source_Record_ID || row.Feed_ID;
+  var feed = cattle_sheetRowsForCurrentMode_('Feed_Forage').slice(-15).map(function(row) {
+    var id = brief_sourceId_(row, 'FEED', row.Source_Record_ID || row.Feed_ID);
     allow(id);
     return {
       record_date: row.Record_Date,
@@ -133,8 +144,8 @@ function brief_buildGroundedInput() {
       source_record_id: id
     };
   });
-  var expenses = cattle_sheetRowsAsObjects_('Expenses').slice(-20).map(function(row) {
-    var id = row.Source_Record_ID || row.Expense_ID;
+  var expenses = cattle_sheetRowsForCurrentMode_('Expenses').slice(-20).map(function(row) {
+    var id = brief_sourceId_(row, 'EXPENSE', row.Source_Record_ID || row.Expense_ID);
     allow(id);
     return {
       expense_date: row.Expense_Date,
@@ -167,7 +178,7 @@ function brief_buildGroundedInput() {
       animals: herdRows
     },
     open_wound_summary: {
-      unresolved_count: openWounds.length,
+      unresolved_count: allOpenWounds.length,
       records: openWounds
     },
     inspection_summary: {
@@ -176,7 +187,7 @@ function brief_buildGroundedInput() {
     },
     urgent_alerts: alerts,
     overdue_tasks: tasks.filter(function(row) {
-      return row.due_date && new Date(row.due_date) < new Date();
+      return cattle_isPastDate_(row.due_date);
     }),
     feed_and_water_summary: feed,
     financial_watchlist: {
@@ -184,20 +195,26 @@ function brief_buildGroundedInput() {
     },
     data_quality_issues: brief_dataQualityIssues_(risk),
     allowed_source_record_ids: Object.keys(allowed),
-    suspected_source_record_ids: openWounds.filter(function(row) {
-      return /screwworm suspected/i.test(String(row.event_type || ''));
-    }).map(function(row) { return row.source_record_id; })
+    suspected_source_record_ids: Object.keys(suspectedById)
   };
   return input;
 }
 
 function brief_generateRanchBrief() {
-  var input = brief_buildGroundedInput();
   if (settings_getBool('OpenAI_Mock_Mode', true)) {
-    return brief_generateMockBrief(input);
+    return brief_generateMockBrief();
   }
+  return brief_generateLiveRanchBrief();
+}
+
+function brief_generateLiveRanchBrief() {
+  var input = brief_buildGroundedInput();
   if (!settings_getBool('OpenAI_Enabled', false)) throw new Error('OpenAI live mode is not enabled in Settings.');
   if (!openai_hasApiKey_()) throw new Error('OpenAI API key is not configured.');
+  if (!brief_confirmSuspectedDataSharing_(input)) {
+    cattle_showToast_('Live Ranch Brief canceled. No data were sent to OpenAI.');
+    return null;
+  }
   var model = settings_get('OpenAI_Model', 'gpt-5.6-sol');
   var output;
   var validation;
@@ -222,6 +239,29 @@ function brief_generateRanchBrief() {
     return brief_logAndRender_(input, output, 'Deterministic Fallback', 'Validation fallback after: ' + validationErrors.join('; '), validation);
   }
   return brief_logAndRender_(input, output, 'GPT-5.6 Live', '', validation);
+}
+
+function brief_confirmSuspectedDataSharing_(input) {
+  if (!input.suspected_source_record_ids || !input.suspected_source_record_ids.length) return true;
+  var ui = SpreadsheetApp.getUi();
+  var response = ui.alert(
+    'Review Suspected Records Before Live GPT',
+    brief_suspectedSharingNotice_(input),
+    ui.ButtonSet.YES_NO
+  );
+  return response === ui.Button.YES;
+}
+
+function brief_suspectedSharingNotice_(input) {
+  var location = input && input.location_summary ? input.location_summary : {};
+  var sendsZip = Object.prototype.hasOwnProperty.call(location, 'zip') &&
+    !!cattle_normalizeText_(location.zip);
+  return 'The grounded brief includes suspected-event type, date, wound status, and source IDs. ' +
+    'Exact observation text, coordinates, and owner data are withheld. ' +
+    (sendsZip
+      ? 'ZIP is included because ZIP sharing is enabled. '
+      : 'ZIP is withheld. ') +
+    'Send this reviewed summary to OpenAI now?';
 }
 
 function brief_generateMockBrief(optionalInput) {
@@ -310,30 +350,102 @@ function brief_validateOutput(output, allowedSourceIds, suspectedSourceIds) {
   var suspected = {};
   (suspectedSourceIds || []).forEach(function(id) { suspected[String(id)] = true; });
   var errors = [];
-  if (!obj || typeof obj !== 'object') return { valid: false, errors: ['Output is not a JSON object.'] };
-  ['headline', 'risk_summary', 'urgent_actions', 'animals_to_review', 'inspection_plan', 'financial_watchlist', 'data_quality_issues', 'questions_for_owner', 'safety_note'].forEach(function(field) {
+  if (!obj || typeof obj !== 'object' || Array.isArray(obj)) return { valid: false, errors: ['Output is not a JSON object.'] };
+  var requiredFields = ['headline', 'risk_summary', 'urgent_actions', 'animals_to_review', 'inspection_plan', 'financial_watchlist', 'data_quality_issues', 'questions_for_owner', 'safety_note'];
+  requiredFields.forEach(function(field) {
     if (!Object.prototype.hasOwnProperty.call(obj, field)) errors.push('Missing field: ' + field);
   });
-  ['urgent_actions', 'animals_to_review', 'inspection_plan', 'financial_watchlist', 'data_quality_issues', 'questions_for_owner'].forEach(function(field) {
-    if (obj[field] && !Array.isArray(obj[field])) errors.push(field + ' must be an array.');
+  Object.keys(obj).forEach(function(field) {
+    if (requiredFields.indexOf(field) === -1) errors.push('Unexpected field: ' + field);
   });
-  (obj.urgent_actions || []).forEach(function(action, index) {
+  ['headline', 'risk_summary', 'safety_note'].forEach(function(field) {
+    if (Object.prototype.hasOwnProperty.call(obj, field) && (typeof obj[field] !== 'string' || !obj[field].trim())) {
+      errors.push(field + ' must be a non-empty string.');
+    }
+  });
+  var arrayFields = ['urgent_actions', 'animals_to_review', 'inspection_plan', 'financial_watchlist', 'data_quality_issues', 'questions_for_owner'];
+  arrayFields.forEach(function(field) {
+    if (Object.prototype.hasOwnProperty.call(obj, field) && !Array.isArray(obj[field])) errors.push(field + ' must be an array.');
+  });
+  var urgentActions = Array.isArray(obj.urgent_actions) ? obj.urgent_actions : [];
+  var animals = Array.isArray(obj.animals_to_review) ? obj.animals_to_review : [];
+  var inspectionPlan = Array.isArray(obj.inspection_plan) ? obj.inspection_plan : [];
+  if (urgentActions.length > 5) errors.push('urgent_actions must contain no more than five items.');
+  urgentActions.forEach(function(action, index) {
+    if (!action || typeof action !== 'object' || Array.isArray(action)) {
+      errors.push('Urgent action at ' + index + ' must be an object.');
+      return;
+    }
+    ['priority', 'action', 'reason', 'source_record_ids'].forEach(function(field) {
+      if (!Object.prototype.hasOwnProperty.call(action, field)) errors.push('Missing urgent action field at ' + index + ': ' + field);
+    });
+    Object.keys(action).forEach(function(field) {
+      if (['priority', 'action', 'reason', 'source_record_ids'].indexOf(field) === -1) errors.push('Unexpected urgent action field at ' + index + ': ' + field);
+    });
     if (['Critical', 'High', 'Normal'].indexOf(action.priority) === -1) errors.push('Invalid urgent action priority at ' + index);
-    (action.source_record_ids || []).forEach(function(id) {
+    if (typeof action.action !== 'string' || !action.action.trim()) errors.push('Urgent action text is required at ' + index);
+    if (typeof action.reason !== 'string' || !action.reason.trim()) errors.push('Urgent action reason is required at ' + index);
+    if (!Array.isArray(action.source_record_ids) || !action.source_record_ids.length) errors.push('Urgent action source_record_ids must be a non-empty array at ' + index);
+    (Array.isArray(action.source_record_ids) ? action.source_record_ids : []).forEach(function(id) {
+      if (typeof id !== 'string' || !id) errors.push('Urgent action source_record_id must be a non-empty string at ' + index);
       if (!allowed[String(id)]) errors.push('Invented or disallowed source_record_id: ' + id);
-      if (suspected[String(id)] && /confirmed/i.test([action.action, action.reason].join(' '))) errors.push('Suspected record cited as confirmed: ' + id);
+      if (suspected[String(id)] && brief_claimsSuspectedConfirmation_([action.action, action.reason].join(' '))) {
+        errors.push('Suspected record cited as confirmed: ' + id);
+      }
     });
   });
-  (obj.animals_to_review || []).forEach(function(animal, index) {
-    (animal.source_record_ids || []).forEach(function(id) {
+  animals.forEach(function(animal, index) {
+    if (!animal || typeof animal !== 'object' || Array.isArray(animal)) {
+      errors.push('Animal recommendation at ' + index + ' must be an object.');
+      return;
+    }
+    ['animal_id', 'reason', 'source_record_ids'].forEach(function(field) {
+      if (!Object.prototype.hasOwnProperty.call(animal, field)) errors.push('Missing animal recommendation field at ' + index + ': ' + field);
+    });
+    Object.keys(animal).forEach(function(field) {
+      if (['animal_id', 'reason', 'source_record_ids'].indexOf(field) === -1) errors.push('Unexpected animal recommendation field at ' + index + ': ' + field);
+    });
+    if (typeof animal.animal_id !== 'string' || !animal.animal_id.trim()) errors.push('Animal ID is required at ' + index);
+    if (typeof animal.reason !== 'string' || !animal.reason.trim()) errors.push('Animal reason is required at ' + index);
+    if (!Array.isArray(animal.source_record_ids) || !animal.source_record_ids.length) errors.push('Animal source_record_ids must be a non-empty array at ' + index);
+    (Array.isArray(animal.source_record_ids) ? animal.source_record_ids : []).forEach(function(id) {
+      if (typeof id !== 'string' || !id) errors.push('Animal source_record_id must be a non-empty string at ' + index);
       if (!allowed[String(id)]) errors.push('Invented animal source_record_id: ' + id);
-      if (suspected[String(id)] && /confirmed/i.test(String(animal.reason || ''))) errors.push('Suspected animal record cited as confirmed: ' + id);
+      if (suspected[String(id)] && brief_claimsSuspectedConfirmation_(animal.reason)) {
+        errors.push('Suspected animal record cited as confirmed: ' + id);
+      }
+    });
+  });
+  inspectionPlan.forEach(function(item, index) {
+    if (!item || typeof item !== 'object' || Array.isArray(item)) {
+      errors.push('Inspection plan item at ' + index + ' must be an object.');
+      return;
+    }
+    ['scope', 'due', 'reason'].forEach(function(field) {
+      if (typeof item[field] !== 'string' || !item[field].trim()) errors.push('Inspection plan ' + field + ' is required at ' + index);
+    });
+    Object.keys(item).forEach(function(field) {
+      if (['scope', 'due', 'reason'].indexOf(field) === -1) errors.push('Unexpected inspection plan field at ' + index + ': ' + field);
+    });
+  });
+  ['financial_watchlist', 'data_quality_issues', 'questions_for_owner'].forEach(function(field) {
+    (Array.isArray(obj[field]) ? obj[field] : []).forEach(function(value, index) {
+      if (typeof value !== 'string') errors.push(field + ' item at ' + index + ' must be a string.');
     });
   });
   var combined = JSON.stringify(obj).toLowerCase();
-  if (/\b(dosage|dose|administer|inject|ivermectin|doramectin|\d+\s*(mg|ml|cc|iu))\b/.test(combined)) errors.push('Output appears to recommend a drug, treatment, or dosage.');
+  if (/\b(administer|inject|dosage|dose|ivermectin|doramectin)\b|\b(treat|medicate)\s+with\b|\d+\s*(mg|ml|cc|iu)\b/.test(combined)) errors.push('Output appears to recommend a drug, treatment, or dosage.');
   if (/\bmovement (is )?(legal|permitted|allowed)\b/.test(combined)) errors.push('Output appears to determine legal movement permission.');
   return { valid: errors.length === 0, errors: errors, output: obj };
+}
+
+function brief_claimsSuspectedConfirmation_(value) {
+  var text = cattle_normalizeText_(value).toLowerCase()
+    .replace(/\bunconfirmed\b/g, '')
+    .replace(/\b(?:not|never)\s+(?:a\s+)?confirmed\b/g, '')
+    .replace(/\bcannot\s+be\s+confirmed\b/g, '')
+    .replace(/\bno\s+(?:official\s+)?confirmation\b/g, '');
+  return /\bconfirmed\b|\bdiagnos(?:e|ed|is)\b|\bpositive\s+(?:case|for\s+(?:new world\s+)?screwworm)\b|\bofficial\s+case\b/.test(text);
 }
 
 function brief_renderToDashboard(output, mode) {
@@ -348,18 +460,22 @@ function brief_renderToDashboard(output, mode) {
     ['Ranch Brief', 'Animals to review', (output.animals_to_review || []).map(function(a) { return a.animal_id + ': ' + a.reason; }).join('\n'), cattle_nowIso_(), ''],
     ['Ranch Brief', 'Safety note', output.safety_note, cattle_nowIso_(), '']
   ];
-  sheet.getRange(start, 1, rows.length, 5).setValues(rows).setWrap(true);
+  var requiredRows = start + rows.length - 1;
+  if (sheet.getMaxRows() < requiredRows) {
+    sheet.insertRowsAfter(sheet.getMaxRows(), requiredRows - sheet.getMaxRows());
+  }
+  sheet.getRange(start, 1, rows.length, 5).setValues(cattle_safeMatrix_(rows)).setWrap(true);
 }
 
 function brief_getLatestBriefSummary_() {
-  var rows = cattle_sheetRowsAsObjects_('Ranch_Brief_Log');
+  var rows = cattle_sheetRowsForCurrentMode_('Ranch_Brief_Log');
   if (!rows.length) return 'No brief generated';
   rows.sort(function(a, b) { return new Date(b.Generated_At) - new Date(a.Generated_At); });
   return rows[0].Generated_At + ' — ' + rows[0].Mode + ' — ' + rows[0].Validation_Status;
 }
 
 function brief_getLatestRenderedBrief_() {
-  var rows = cattle_sheetRowsAsObjects_('Ranch_Brief_Log');
+  var rows = cattle_sheetRowsForCurrentMode_('Ranch_Brief_Log');
   if (!rows.length) return '';
   rows.sort(function(a, b) { return new Date(b.Generated_At) - new Date(a.Generated_At); });
   return rows[0].Rendered_Brief || '';
@@ -380,6 +496,7 @@ function brief_callLiveModel_(input, model, repairInstruction) {
   if (repairInstruction) instruction += ' ' + repairInstruction;
   var payload = {
     model: model,
+    max_output_tokens: 4000,
     input: [
       { role: 'system', content: [{ type: 'input_text', text: instruction }] },
       { role: 'user', content: [{ type: 'input_text', text: JSON.stringify(input) }] }
@@ -407,14 +524,15 @@ function brief_logAndRender_(input, output, mode, errorMessage, validation) {
     Brief_ID: cattle_uuid_('BRIEF'),
     Generated_At: cattle_nowIso_(),
     Generated_By: Session.getActiveUser ? Session.getActiveUser().getEmail() : '',
-    Model: mode === 'GPT-5.6 Live' ? settings_get('OpenAI_Model', 'gpt-5.6-sol') : settings_get('OpenAI_Model', 'gpt-5.6-sol'),
+    Model: mode === 'GPT-5.6 Live' ? settings_get('OpenAI_Model', 'gpt-5.6-sol') : '',
     Mode: mode,
     Input_Record_Count: input.allowed_source_record_ids.length,
     Input_Hash: cattle_hashString_(JSON.stringify(input)),
-    Output_JSON: cattle_json_(output),
+    Output_JSON: nws_jsonForCell_(output),
     Rendered_Brief: rendered,
     Validation_Status: validation.valid ? 'Valid' : 'Invalid: ' + validation.errors.join('; '),
-    Error_Message: errorMessage || ''
+    Error_Message: errorMessage || '',
+    Data_Mode: settings_getBool('Contest_Demo_Mode', false) ? 'Demo' : ''
   });
   brief_renderToDashboard(output, mode);
   audit_log('INFO', 'GENERATE_RANCH_BRIEF', 'Ranch Brief generated.', { mode: mode, validation: validation.valid ? 'Valid' : validation.errors });
@@ -439,10 +557,15 @@ function brief_dataQualityIssues_(risk) {
   var issues = [];
   if (!risk.zip) issues.push('Ranch ZIP is not configured.');
   if (!risk.county) issues.push('Resolved county is missing.');
-  if (!risk.latitude || !risk.longitude) issues.push('Location coordinates are unavailable.');
+  if (!risk_normalizePoint_({ latitude: risk.latitude, longitude: risk.longitude }).valid) issues.push('Location coordinates are unavailable.');
   if (risk.official_data_health === 'Unavailable') issues.push('Official NWS data are unavailable or hard stale.');
   if (risk.location_source === 'ZIP Centroid') issues.push('Location uses ZIP centroid approximation.');
   return issues;
+}
+
+function brief_sourceId_(row, prefix, candidate) {
+  if (candidate !== null && candidate !== undefined && String(candidate).trim()) return String(candidate);
+  return String(prefix || 'RECORD') + ':ROW:' + String(row && row._rowNumber ? row._rowNumber : 'UNKNOWN');
 }
 
 function brief_outputSchema_() {

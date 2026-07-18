@@ -11,7 +11,7 @@ node tools/run_local_tests.js
 Expected result:
 
 ```text
-Passed 51 pure unit tests.
+Passed 100 pure unit tests, 5 HTML checks, and 3 fixture checks.
 ```
 
 Coverage includes:
@@ -19,10 +19,14 @@ Coverage includes:
 - ZIP normalization and validation.
 - Leading-zero handling.
 - Fixture geocoder parsing.
-- Polygon, MultiPolygon, holes, boundaries, invalid geometry, and Esri conversion.
-- Risk outcomes for infested zones, surveillance zones, affected counties, nearby detections, delayed data, unavailable data, non-Texas locations, and demo mode.
-- ArcGIS schema alias mapping and endpoint discovery fixtures.
+- Polygon, MultiPolygon, holes, boundaries, line-segment distance, invalid geometry, Esri conversion, and compressed geometry round-trips.
+- Risk outcomes for infested zones, surveillance zones, affected counties, unknown zone types, nearby detections, delayed data, unavailable data, non-Texas locations, missing ZIPs, and demo mode.
+- ArcGIS schema alias/domain mapping, definition-expression preservation, endpoint discovery, and URL-restriction fixtures.
 - GPT structured-output validation, invented source ID rejection, treatment/dosage rejection, suspected-record confirmation rejection, and deterministic fallback.
+- Date, snapshot comparison, response extraction, and safe HTML-template serialization.
+- Formula-like external text sanitization and complete demo/live mode columns.
+- Browser-side JavaScript compilation and five-digit onboarding ZIP validation.
+- Checked-in ArcGIS coded-domain, filtered-web-map, and USDA endpoint-discovery fixtures.
 
 ## Apps Script Tests
 
@@ -51,7 +55,7 @@ The Apps Script test path verifies:
 5. Load the NWS contest scenario.
 6. Confirm the `DEMO DATA — NOT CURRENT OUTBREAK INFORMATION` banner appears.
 7. Open the local map dialog.
-8. Confirm the ranch marker is labeled `ZIP Centroid`.
+8. Confirm the ranch marker is labeled `Approximate ZIP centroid`.
 9. Generate a mock Ranch Brief.
 10. Confirm `Ranch_Brief_Log` records `Mode = Mock`.
 11. Clear demo data.
@@ -67,16 +71,17 @@ The Apps Script test path verifies:
    - `Delayed`
    - `Unavailable`
 5. If public layers cannot be queried, confirm the TAHC official map link is still visible and the adapter does not fabricate records.
+6. In `NWS_Official_Zones`, confirm large geometry cells begin with `GZIP_BASE64:` rather than being truncated.
 
 ## GPT-5.6 Live Smoke Test
 
 1. Set the API key with **Set OpenAI API Key**.
-2. Set `OpenAI_Enabled = TRUE`.
-3. Set `OpenAI_Mock_Mode = FALSE`.
-4. Run **Test OpenAI Connection**.
-5. Run **Generate GPT-5.6 Ranch Brief**.
-6. Confirm:
+2. Run **Test OpenAI Connection**.
+3. Run **Generate Live GPT-5.6 Ranch Brief**.
+4. If suspected records are in scope, review the disclosure prompt and explicitly approve or cancel.
+5. Confirm:
    - `Ranch_Brief_Log.Mode = GPT-5.6 Live`
    - no API key appears in any sheet
+   - the API request uses `store: false`
    - urgent actions cite allowed source record IDs
    - invalid model output falls back deterministically

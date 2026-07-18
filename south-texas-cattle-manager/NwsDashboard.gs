@@ -1,12 +1,13 @@
 function nws_buildWatchSheet() {
-  var sheet = cattle_ensureHeaders_(CATTLEOS.WATCH_SHEET);
+  var sheet = cattle_getOrCreateSheet_(CATTLEOS.WATCH_SHEET);
+  sheet.getDataRange().breakApart();
   sheet.clear();
   sheet.setHiddenGridlines(true);
-  sheet.getRange('A1:H1').merge().setValue('CattleOS New World Screwworm Watch')
+  sheet.getRange('A1:H1').merge().setValue(cattle_safeCellValue_(settings_getRanchName_() + ' — New World Screwworm Watch'))
     .setFontSize(18).setFontWeight('bold').setFontColor('#ffffff').setBackground('#164e63');
   sheet.getRange('A2:H2').merge().setValue(CATTLEOS.SAFETY_NOTICE)
     .setWrap(true).setFontColor('#7f1d1d').setBackground('#fef2f2');
-  sheet.getRange('A4:C8').setBackground('#eff6ff');
+  sheet.getRange('A4:C9').setBackground('#eff6ff');
   sheet.getRange('A4:C4').merge().setValue('ZIP Input').setFontWeight('bold').setFontColor('#0f172a');
   sheet.getRange('A5').setValue('Ranch ZIP Code');
   sheet.getRange('B5').setNumberFormat('@').setBackground('#bfdbfe').setFontWeight('bold');
@@ -14,6 +15,7 @@ function nws_buildWatchSheet() {
   sheet.getRange('A6').setValue('Location source');
   sheet.getRange('A7').setValue('Resolved location');
   sheet.getRange('A8').setValue('Official data health');
+  sheet.getRange('A9').setValue('Last successful refresh');
   sheet.getRange('A10:H10').setValues([[
     'Official Zone Status',
     'Operational Attention',
@@ -28,14 +30,14 @@ function nws_buildWatchSheet() {
   sheet.getRange('A13:B22').setValues([
     ['Action', 'How to Run'],
     ['Refresh Official Data', 'Cattle Manager → New World Screwworm Watch → Refresh Official NWS Data'],
-    ['Update ZIP / Location', 'Cattle Manager → New World Screwworm Watch → Update ZIP / Ranch Location'],
+    ['Apply ZIP from NWS Watch', 'Enter ZIP in B5, then Cattle Manager → New World Screwworm Watch → Apply ZIP from NWS Watch'],
     ['Open Official TAHC Map', CATTLEOS.TAHC_MAP_URL],
     ['Open USDA Confirmed Detections', CATTLEOS.USDA_CASES_URL],
     ['Start Wound/Screwworm Inspection', 'Cattle Manager → New World Screwworm Watch → Start Wound/Screwworm Inspection'],
-    ['Log Suspicious Finding', 'Cattle Manager → New World Screwworm Watch → Start Wound/Screwworm Inspection, then record the observation in Health or Inspections'],
-    ['Generate GPT-5.6 Ranch Brief', 'Cattle Manager → Ranch Brief → Generate GPT-5.6 Ranch Brief'],
+    ['Log Suspicious Finding', 'Cattle Manager → New World Screwworm Watch → Log Suspicious Finding'],
+    ['Generate Live GPT-5.6 Ranch Brief', 'Cattle Manager → Ranch Brief → Generate Live GPT-5.6 Ranch Brief'],
     ['Set OpenAI API Key', 'Cattle Manager → Ranch Brief → Set OpenAI API Key'],
-    ['Map Dialog', 'Cattle Manager → New World Screwworm Watch → Open NWS Watch, then use the map menu/dialog']
+    ['Map Dialog', 'Cattle Manager → New World Screwworm Watch → Open Local NWS Map']
   ]);
   sheet.getRange('A13:B13').setFontWeight('bold').setBackground('#334155').setFontColor('#ffffff');
   sheet.getRange('A24:H24').merge().setValue('Map and Source Context')
@@ -63,7 +65,8 @@ function nws_buildWatchSheet() {
 }
 
 function nws_buildMainDashboard() {
-  var sheet = cattle_ensureHeaders_(CATTLEOS.DASHBOARD_SHEET);
+  var sheet = cattle_getOrCreateSheet_(CATTLEOS.DASHBOARD_SHEET);
+  sheet.getDataRange().breakApart();
   sheet.clear();
   sheet.setHiddenGridlines(true);
   sheet.getRange('A1:E1').merge().setValue('CattleOS Dashboard')
@@ -88,10 +91,13 @@ function nws_refreshDashboard() {
     settings_set('NWS_Last_Risk_JSON', cattle_json_(result), { editable: false });
     audit_log('WARN', 'RISK_EVALUATION_FAILED', 'Risk evaluation failed.', { error: err.message });
   }
-  nws_renderWatch_(result);
-  nws_renderDashboard_(result);
+  nws_createSuspectedCaseAlert();
+  var inspectionQueue = nws_buildInspectionQueue();
+  var workflow = nws_buildWorkflowSummary_(result.operational_attention, inspectionQueue);
+  nws_renderWatch_(result, workflow);
+  nws_renderDashboard_(result, workflow);
   if (settings_getBool('NWS_Create_Inspection_Tasks', true)) {
-    nws_createRiskBasedInspectionTasks();
+    nws_createRiskBasedInspectionTasks(inspectionQueue, workflow.nextInspectionDue);
   }
   return result;
 }
@@ -99,7 +105,6 @@ function nws_refreshDashboard() {
 function nws_openWatch() {
   var result = nws_refreshDashboard();
   cattle_getSpreadsheet_().setActiveSheet(cattle_getSheet_(CATTLEOS.WATCH_SHEET));
-  nws_openMapDialog();
   return result;
 }
 
@@ -132,30 +137,32 @@ function nws_openUsdaConfirmedDetections() {
 
 function nws_openMapDialog() {
   var template = HtmlService.createTemplateFromFile('NwsMap');
-  template.mapJson = JSON.stringify(nws_getMapData_());
+  template.mapJson = cattle_safeJsonForHtml_(nws_getMapData_());
   var html = template.evaluate().setWidth(820).setHeight(620);
   SpreadsheetApp.getUi().showModalDialog(html, 'CattleOS NWS Map');
 }
 
-function nws_renderWatch_(result) {
+function nws_renderWatch_(result, workflow) {
   var sheet = cattle_getSheet_(CATTLEOS.WATCH_SHEET);
   if (!sheet) return;
   var health = nws_getDataHealth();
+  sheet.getRange('A1:H1').setValue(cattle_safeCellValue_(settings_getRanchName_() + ' — New World Screwworm Watch'));
   settings_syncZipToWatch_(result.zip || '');
-  sheet.getRange('B6').setValue(result.location_source || '');
-  sheet.getRange('B7').setValue([result.city, result.county, result.state].filter(String).join(', '));
-  sheet.getRange('B8').setValue(nws_describeDataHealth_(health));
+  sheet.getRange('B6').setValue(cattle_safeCellValue_(result.location_source || ''));
+  sheet.getRange('B7').setValue(cattle_safeCellValue_([result.city, result.county, result.state].filter(String).join(', ')));
+  sheet.getRange('B8').setValue(cattle_safeCellValue_(nws_describeDataHealth_(health)));
+  sheet.getRange('B9').setValue(cattle_safeCellValue_(result.official_data_refreshed_at || health.lastSuccess || 'No successful refresh'));
   var statusValues = [[
     result.official_zone_status || 'Unknown',
     result.operational_attention || 'Data Unavailable',
     result.county || '',
     cattle_formatDistance_(result.nearest_detection_miles),
     result.official_data_health || health.state,
-    nws_getLastInspectionSummary_(),
-    nws_findAnimalsNeedingWoundReview().length,
-    nws_nextInspectionDue_(result.operational_attention)
+    workflow ? workflow.lastInspectionSummary : nws_getLastInspectionSummary_(),
+    workflow ? workflow.animalsWithOpenWounds.length : nws_findAnimalsWithOpenWounds_().length,
+    workflow ? workflow.nextInspectionDue : nws_nextInspectionDue_(result.operational_attention)
   ]];
-  sheet.getRange('A11:H11').setValues(statusValues).setWrap(true);
+  sheet.getRange('A11:H11').setValues(cattle_safeMatrix_(statusValues)).setWrap(true);
   var color = nws_attentionColor_(result.operational_attention);
   sheet.getRange('B11').setBackground(color.background).setFontColor(color.foreground).setFontWeight('bold');
   sheet.getRange('E11').setBackground(nws_healthColor_(result.official_data_health));
@@ -170,7 +177,7 @@ function nws_renderWatch_(result) {
   ).setWrap(true);
 }
 
-function nws_renderDashboard_(result) {
+function nws_renderDashboard_(result, workflow) {
   var sheet = cattle_getSheet_(CATTLEOS.DASHBOARD_SHEET);
   if (!sheet) return;
   if (sheet.getLastRow() < 4) nws_buildMainDashboard();
@@ -183,14 +190,14 @@ function nws_renderDashboard_(result) {
     ['New World Screwworm Watch', 'Nearest confirmed detection', cattle_formatDistance_(result.nearest_detection_miles), now, result.nearest_detection_county || 'Shown only when coordinates are reliable'],
     ['New World Screwworm Watch', 'Official data health', result.official_data_health, now, nws_describeDataHealth_(nws_getDataHealth())],
     ['New World Screwworm Watch', 'Last official refresh', result.official_data_refreshed_at || '', now, 'Live, delayed, unavailable, and demo states remain visible'],
-    ['Herd Workflow', 'Last whole-herd inspection', nws_getLastInspectionSummary_(), now, 'From Inspections sheet'],
-    ['Herd Workflow', 'Animals with unresolved open wounds', nws_findAnimalsNeedingWoundReview().length, now, 'From Health records'],
-    ['Herd Workflow', 'Overdue wound follow-ups', nws_countOverdueWoundFollowUps_(), now, 'From Health follow-up due dates'],
-    ['Herd Workflow', 'Next recommended inspection', nws_nextInspectionDue_(result.operational_attention), now, 'Risk-based cadence is a management default'],
+    ['Herd Workflow', 'Last whole-herd inspection', workflow ? workflow.lastInspectionSummary : nws_getLastInspectionSummary_(), now, 'From Inspections sheet'],
+    ['Herd Workflow', 'Animals with unresolved open wounds', workflow ? workflow.animalsWithOpenWounds.length : nws_findAnimalsWithOpenWounds_().length, now, 'From Health records'],
+    ['Herd Workflow', 'Overdue wound follow-ups', workflow ? workflow.overdueWoundFollowUps : nws_countOverdueWoundFollowUps_(), now, 'From Health follow-up due dates'],
+    ['Herd Workflow', 'Next recommended inspection', workflow ? workflow.nextInspectionDue : nws_nextInspectionDue_(result.operational_attention), now, 'Risk-based cadence is a management default'],
     ['Ranch Brief', 'Latest brief', brief_getLatestBriefSummary_(), now, 'OpenAI live, mock, or deterministic fallback']
   ];
   sheet.getRange(5, 1, Math.max(sheet.getMaxRows() - 4, 1), 5).clearContent();
-  sheet.getRange(5, 1, rows.length, 5).setValues(rows).setWrap(true);
+  sheet.getRange(5, 1, rows.length, 5).setValues(cattle_safeMatrix_(rows)).setWrap(true);
   var banner = nws_dashboardBanner_(result);
   sheet.getRange('A3:E3').merge().setValue(banner.message).setFontWeight('bold').setWrap(true)
     .setBackground(banner.background).setFontColor(banner.foreground);
@@ -200,91 +207,170 @@ function nws_renderDashboard_(result) {
 function nws_buildInspectionQueue() {
   var queue = [];
   var today = new Date();
-  cattle_sheetRowsAsObjects_('Health').forEach(function(row) {
+  cattle_sheetRowsForCurrentMode_('Health').forEach(function(row) {
     var eventType = String(row.Event_Type || '');
     var woundStatus = String(row.Wound_Status || '');
     var resolved = cattle_toBool_(row.Resolved, false);
     var sourceId = row.Source_Record_ID || row.Health_ID || '';
-    if (/screwworm suspected/i.test(eventType)) {
-      queue.push(nws_queueItem_('Critical', 1, row.Animal_ID, 'Unresolved screwworm-suspected observation', sourceId, row.Follow_Up_Due));
-    } else if (/open|unresolved|draining|enlarging|foul/i.test(woundStatus) && !resolved) {
-      queue.push(nws_queueItem_('High', 2, row.Animal_ID, 'Open or unresolved wound requires review', sourceId, row.Follow_Up_Due));
-    } else if (/castrat|dehorn|brand|surgery|injury|wound/i.test(eventType) && !resolved) {
-      queue.push(nws_queueItem_('High', 4, row.Animal_ID, 'Recent procedure or injury site requires review', sourceId, row.Follow_Up_Due));
+    var review = nws_classifyHealthReview_(eventType, woundStatus, resolved);
+    if (review) {
+      queue.push(nws_queueItem_(review.priority, review.rank, row.Animal_ID, review.reason, sourceId, row.Follow_Up_Due));
     }
-    if (row.Follow_Up_Due && new Date(row.Follow_Up_Due) < today && !resolved) {
+    if (cattle_isPastDate_(row.Follow_Up_Due, today) && !resolved) {
       queue.push(nws_queueItem_('High', 6, row.Animal_ID, 'Overdue health follow-up', sourceId, row.Follow_Up_Due));
     }
   });
-  cattle_sheetRowsAsObjects_('Calves').forEach(function(row) {
+  cattle_sheetRowsForCurrentMode_('Calves').forEach(function(row) {
     if (!row.Birth_Date) return;
-    var ageDays = (today.getTime() - new Date(row.Birth_Date).getTime()) / 86400000;
+    var birthDate = cattle_parseDate_(row.Birth_Date);
+    if (!birthDate) return;
+    var ageDays = (today.getTime() - birthDate.getTime()) / 86400000;
     if (ageDays >= 0 && ageDays <= 14) {
       queue.push(nws_queueItem_('High', 3, row.Calf_ID, 'Recent birth and navel site review', row.Source_Record_ID || row.Calf_ID, ''));
     }
   });
-  cattle_sheetRowsAsObjects_('Pastures').forEach(function(row) {
+  cattle_sheetRowsForCurrentMode_('Pastures').forEach(function(row) {
     if (/heavy|high/i.test(String(row.Fly_Pressure || ''))) {
-      queue.push(nws_queueItem_('Normal', 7, row.Pasture_ID || row.Pasture_Name, 'Pasture has heavy fly pressure', row.Source_Record_ID || row.Pasture_ID, ''));
+      queue.push(nws_queueItem_('Normal', 7, row.Pasture_ID || row.Pasture_Name, 'Pasture has heavy fly pressure', row.Source_Record_ID || row.Pasture_ID, '', 'Pasture'));
     }
   });
-  queue.push(nws_queueItem_('Normal', 8, 'WHOLE_HERD', 'Whole-herd check', 'WHOLE_HERD', ''));
+  queue.push(nws_queueItem_('Normal', 8, 'WHOLE_HERD', 'Whole-herd check', 'WHOLE_HERD', '', 'Whole Herd'));
   queue.sort(function(a, b) { return a.rank - b.rank; });
   return queue;
 }
 
-function nws_createRiskBasedInspectionTasks() {
+function nws_createRiskBasedInspectionTasks(optionalQueue, optionalDueDate) {
   if (!settings_getBool('NWS_Create_Inspection_Tasks', true)) return 0;
   var risk = nws_getCachedRiskResult_();
   var attention = risk.operational_attention || 'Routine';
-  var dueDate = nws_nextInspectionDue_(attention);
+  var dueDate = optionalDueDate || nws_nextInspectionDue_(attention);
   var created = 0;
-  var queue = nws_buildInspectionQueue().slice(0, 25);
+  var queue = (optionalQueue || nws_buildInspectionQueue()).slice(0, 25);
+  var openTaskKeys = {};
+  var openRiskScopes = {};
+  var processedScopes = {};
+  var tasksSheet = cattle_getSheet_('Tasks');
+  var taskMap = tasksSheet ? cattle_getHeaderMap_(tasksSheet) : {};
+  var updated = 0;
+  cattle_sheetRowsForCurrentMode_('Tasks').forEach(function(row) {
+    if (/complete|done|closed|cancel/i.test(String(row.Status || ''))) return;
+    if (row.Task_Key) openTaskKeys[String(row.Task_Key)] = true;
+    if (row.Task_Type === 'NWS Inspection') {
+      openRiskScopes[String(row.Scope || '') + ':' + String(row.Scope_ID || '')] = row;
+    }
+  });
   queue.forEach(function(item) {
-    var scope = item.scopeId === 'WHOLE_HERD' ? 'Whole Herd' : 'Animal';
-    var key = 'NWS_INSPECTION:' + scope + ':' + item.scopeId + ':' + attention + ':' + dueDate;
-    if (nws_openTaskExists_(key)) return;
-    cattle_appendObject_('Tasks', {
+    var scope = item.scope || (item.scopeId === 'WHOLE_HERD' ? 'Whole Herd' : 'Animal');
+    var itemDueDate = nws_earlierDate_(item.dueDate, dueDate);
+    var key = 'NWS_INSPECTION:' + scope + ':' + item.scopeId + ':' + attention + ':' + itemDueDate;
+    var riskScopeKey = scope + ':' + item.scopeId;
+    if (processedScopes[riskScopeKey]) return;
+    processedScopes[riskScopeKey] = true;
+    var desiredPriority = attention === 'Critical' || item.priority === 'Critical'
+      ? 'Critical'
+      : (attention === 'Heightened' || item.priority === 'High' ? 'High' : 'Normal');
+    var desiredReason = item.reason + ' — created from ' + attention + ' operational attention.';
+    var existingTask = openRiskScopes[riskScopeKey];
+    if (existingTask) {
+      var tightenedDueDate = nws_earlierDate_(existingTask.Due_Date, itemDueDate);
+      var tightenedPriority = nws_moreUrgentPriority_(existingTask.Priority, desiredPriority);
+      var existingDueKey = nws_dateKey_(existingTask.Due_Date);
+      var tightenedDueKey = nws_dateKey_(tightenedDueDate);
+      var dueWasTightened = existingDueKey !== tightenedDueKey;
+      var shouldReplaceContext = tightenedPriority === desiredPriority ||
+        dueWasTightened;
+      var changed = false;
+      if (taskMap.Due_Date && dueWasTightened) {
+        tasksSheet.getRange(existingTask._rowNumber, taskMap.Due_Date).setValue(tightenedDueDate);
+        changed = true;
+      }
+      if (taskMap.Priority && String(existingTask.Priority || '') !== tightenedPriority) {
+        tasksSheet.getRange(existingTask._rowNumber, taskMap.Priority).setValue(tightenedPriority);
+        changed = true;
+      }
+      if (shouldReplaceContext && taskMap.Reason && String(existingTask.Reason || '') !== desiredReason) {
+        tasksSheet.getRange(existingTask._rowNumber, taskMap.Reason).setValue(cattle_safeCellValue_(desiredReason));
+        changed = true;
+      }
+      if (shouldReplaceContext && taskMap.Source_Record_ID && String(existingTask.Source_Record_ID || '') !== String(item.sourceRecordId || '')) {
+        tasksSheet.getRange(existingTask._rowNumber, taskMap.Source_Record_ID).setValue(cattle_safeCellValue_(item.sourceRecordId || ''));
+        changed = true;
+      }
+      if (changed) updated++;
+      return;
+    }
+    if (openTaskKeys[key]) return;
+    var task = {
       Task_ID: cattle_uuid_('TASK'),
       Task_Key: key,
       Task_Type: 'NWS Inspection',
       Scope: scope,
       Scope_ID: item.scopeId,
-      Due_Date: dueDate,
-      Priority: attention === 'Critical' || item.priority === 'Critical' ? 'Critical' : (attention === 'Heightened' || item.priority === 'High' ? 'High' : 'Normal'),
+      Due_Date: itemDueDate,
+      Priority: desiredPriority,
       Status: 'Open',
-      Reason: item.reason + ' — created from ' + attention + ' operational attention.',
+      Reason: desiredReason,
       Created_At: cattle_nowIso_(),
       Completed_At: '',
       Source_Record_ID: item.sourceRecordId,
       Data_Mode: settings_getBool('Contest_Demo_Mode', false) ? 'Demo' : ''
-    });
+    };
+    cattle_appendObject_('Tasks', task);
+    openTaskKeys[key] = true;
+    openRiskScopes[riskScopeKey] = task;
     created++;
   });
-  if (created) audit_log('INFO', 'CREATE_NWS_TASKS', 'Risk-based NWS inspection tasks created.', { created: created, attention: attention, dueDate: dueDate });
+  if (created || updated) {
+    audit_log('INFO', 'CREATE_NWS_TASKS', 'Risk-based NWS inspection tasks synchronized.', {
+      created: created,
+      updated: updated,
+      attention: attention,
+      dueDate: dueDate
+    });
+  }
   return created;
 }
 
-function nws_findAnimalsNeedingWoundReview() {
+function nws_findAnimalsNeedingWoundReview(optionalQueue) {
   var animalIds = {};
-  nws_buildInspectionQueue().forEach(function(item) {
-    if (item.scopeId && item.scopeId !== 'WHOLE_HERD' && item.rank <= 6) animalIds[item.scopeId] = true;
+  (optionalQueue || nws_buildInspectionQueue()).forEach(function(item) {
+    if (item.scope === 'Animal' && item.scopeId && item.rank <= 6) animalIds[item.scopeId] = true;
+  });
+  return Object.keys(animalIds);
+}
+
+function nws_findAnimalsWithOpenWounds_(optionalQueue) {
+  var animalIds = {};
+  (optionalQueue || nws_buildInspectionQueue()).forEach(function(item) {
+    if (item.scope === 'Animal' && item.scopeId && (item.rank === 1 || item.rank === 2)) {
+      animalIds[item.scopeId] = true;
+    }
   });
   return Object.keys(animalIds);
 }
 
 function nws_createSuspectedCaseAlert() {
   var count = 0;
-  cattle_sheetRowsAsObjects_('Health').forEach(function(row) {
-    if (/screwworm suspected/i.test(String(row.Event_Type || ''))) {
-      count += nws_upsertSuspectedAlert_(row.Animal_ID, row.Source_Record_ID || row.Health_ID || '', row.Observation || '');
+  var activeKeys = {};
+  var openTaskKeys = {};
+  cattle_sheetRowsForCurrentMode_('Tasks').forEach(function(row) {
+    if (row.Task_Key && !/complete|done|closed|cancel/i.test(String(row.Status || ''))) {
+      openTaskKeys[String(row.Task_Key)] = true;
     }
   });
-  cattle_sheetRowsAsObjects_('Inspections').forEach(function(row) {
+  cattle_sheetRowsForCurrentMode_('Health').forEach(function(row) {
+    if (/screwworm suspected/i.test(String(row.Event_Type || '')) && !cattle_toBool_(row.Resolved, false)) {
+      activeKeys[nws_suspectedAlertKey_(row.Animal_ID, row.Source_Record_ID || row.Health_ID || '')] = true;
+      count += nws_upsertSuspectedAlert_(row.Animal_ID, row.Source_Record_ID || row.Health_ID || '', row.Observation || '', openTaskKeys);
+    }
+  });
+  cattle_sheetRowsForCurrentMode_('Inspections').forEach(function(row) {
     if (Number(row.Suspicious_Larvae_Count || 0) > 0) {
-      count += nws_upsertSuspectedAlert_(row.Scope_ID || row.Scope || '', row.Source_Record_ID || row.Inspection_ID || '', row.Findings || '');
+      activeKeys[nws_suspectedAlertKey_(row.Scope_ID || row.Scope || '', row.Source_Record_ID || row.Inspection_ID || '')] = true;
+      count += nws_upsertSuspectedAlert_(row.Scope_ID || row.Scope || '', row.Source_Record_ID || row.Inspection_ID || '', row.Findings || '', openTaskKeys);
     }
   });
+  nws_closeClearedSuspectedAlerts_(activeKeys);
   return count;
 }
 
@@ -329,16 +415,19 @@ function nws_logSuspiciousFinding() {
   });
   nws_createSuspectedCaseAlert();
   cattle_uiAlert_('Critical Alert Created', 'Contact a veterinarian and the Texas Animal Health Commission through official reporting channels. This workbook does not diagnose or submit a report.');
+  return id;
 }
 
 function nws_getMapData_() {
   var result = nws_getCachedRiskResult_();
-  var zones = nws_getStoredZones_().map(function(row) {
+  var zones = nws_getStoredZones_().filter(function(row) {
+    return risk_zoneIsActive_(row);
+  }).map(function(row) {
     return {
       name: row.Zone_Name,
       type: row.Zone_Type,
       mode: row.Data_Mode,
-      geometry: cattle_parseJsonSafe_(row.Geometry_GeoJSON, null)
+      geometry: nws_parseGeometryCell_(row.Geometry_GeoJSON)
     };
   }).filter(function(row) { return row.geometry; }).slice(0, 60);
   var cases = nws_getStoredCases_().map(function(row) {
@@ -392,10 +481,11 @@ function nws_emptyRiskResult_(message) {
   };
 }
 
-function nws_queueItem_(priority, rank, scopeId, reason, sourceRecordId, dueDate) {
+function nws_queueItem_(priority, rank, scopeId, reason, sourceRecordId, dueDate, scope) {
   return {
     priority: priority,
     rank: rank,
+    scope: scope || (scopeId === 'WHOLE_HERD' ? 'Whole Herd' : 'Animal'),
     scopeId: String(scopeId || ''),
     reason: reason,
     sourceRecordId: sourceRecordId || '',
@@ -403,55 +493,79 @@ function nws_queueItem_(priority, rank, scopeId, reason, sourceRecordId, dueDate
   };
 }
 
-function nws_nextInspectionDue_(attention) {
+function nws_classifyHealthReview_(eventType, woundStatus, resolved) {
+  if (cattle_toBool_(resolved, false)) return null;
+  var event = String(eventType || '');
+  var wound = String(woundStatus || '');
+  if (/screwworm suspected/i.test(event)) {
+    return { priority: 'Critical', rank: 1, reason: 'Unresolved screwworm-suspected observation' };
+  }
+  if (/open|unresolved/i.test(wound)) {
+    return { priority: 'High', rank: 2, reason: 'Open or unresolved wound requires review' };
+  }
+  if (/castrat|dehorn|brand|surgery|injury|wound/i.test(event)) {
+    return { priority: 'High', rank: 4, reason: 'Recent procedure or injury site requires review' };
+  }
+  if (/draining|enlarging|foul/i.test(wound)) {
+    return { priority: 'High', rank: 5, reason: 'Wound condition requires prompt review' };
+  }
+  return null;
+}
+
+function nws_nextInspectionDue_(attention, optionalBaseDate) {
   var days = settings_getNumber('Inspection_Cadence_Normal_Days', 14);
   if (attention === 'Heightened') days = settings_getNumber('Inspection_Cadence_Heightened_Days', 3);
   if (attention === 'Critical') days = settings_getNumber('Inspection_Cadence_Critical_Days', 1);
   if (attention === 'Data Unavailable') days = settings_getNumber('Inspection_Cadence_Heightened_Days', 3);
-  var due = new Date();
+  var due = optionalBaseDate ? new Date(optionalBaseDate.getTime()) : (nws_getLastWholeHerdInspectionDate_() || new Date());
   due.setDate(due.getDate() + Math.max(0, Number(days)));
   return Utilities.formatDate(due, CATTLEOS.TIME_ZONE, 'yyyy-MM-dd');
 }
 
 function nws_getLastInspectionSummary_() {
-  var rows = cattle_sheetRowsAsObjects_('Inspections').filter(function(row) {
-    return row.Inspection_Date && /whole|wound|screwworm|nws/i.test([row.Scope, row.Findings].join(' '));
+  var rows = cattle_sheetRowsForCurrentMode_('Inspections').filter(function(row) {
+    return cattle_parseDate_(row.Inspection_Date) && nws_isWholeHerdInspection_(row);
   });
   if (!rows.length) return 'No inspection recorded';
-  rows.sort(function(a, b) { return new Date(b.Inspection_Date) - new Date(a.Inspection_Date); });
+  rows.sort(function(a, b) { return cattle_parseDate_(b.Inspection_Date) - cattle_parseDate_(a.Inspection_Date); });
   return rows[0].Inspection_Date + ' — ' + (rows[0].Scope || 'Inspection');
 }
 
 function nws_countOverdueWoundFollowUps_() {
   var today = new Date();
-  return cattle_sheetRowsAsObjects_('Health').filter(function(row) {
-    return row.Follow_Up_Due && new Date(row.Follow_Up_Due) < today &&
+  return cattle_sheetRowsForCurrentMode_('Health').filter(function(row) {
+    return cattle_isPastDate_(row.Follow_Up_Due, today) &&
       !cattle_toBool_(row.Resolved, false) &&
       /wound|open|unresolved|screwworm/i.test([row.Event_Type, row.Wound_Status].join(' '));
   }).length;
 }
 
 function nws_openTaskExists_(taskKey) {
-  return cattle_sheetRowsAsObjects_('Tasks').some(function(row) {
+  return cattle_sheetRowsForCurrentMode_('Tasks').some(function(row) {
     return row.Task_Key === taskKey && !/complete|done|closed|cancel/i.test(String(row.Status || ''));
   });
 }
 
-function nws_upsertSuspectedAlert_(scopeId, sourceRecordId, observation) {
-  var alertKey = 'NWS_SUSPECTED:' + String(sourceRecordId || scopeId || 'UNKNOWN');
+function nws_upsertSuspectedAlert_(scopeId, sourceRecordId, observation, openTaskKeys) {
+  var alertKey = nws_suspectedAlertKey_(scopeId, sourceRecordId);
+  var existing = cattle_sheetRowsForCurrentMode_('Alerts').filter(function(row) {
+    return row.Alert_Key === alertKey;
+  })[0] || {};
   cattle_upsertByKey_('Alerts', 'Alert_Key', alertKey, {
-    Alert_ID: 'ALERT:' + cattle_hashString_(alertKey),
+    Alert_ID: existing.Alert_ID || 'ALERT:' + cattle_hashString_(alertKey),
     Alert_Key: alertKey,
     Severity: 'Critical',
     Status: 'Open',
     Message: 'Suspected screwworm observation recorded for ' + (scopeId || 'unknown scope') + '. Contact a veterinarian and TAHC through official reporting channels. This is not a confirmed case. TAHC: ' + CATTLEOS.TAHC_PAGE_URL,
-    Created_At: cattle_nowIso_(),
+    Created_At: existing.Created_At || cattle_nowIso_(),
     Updated_At: cattle_nowIso_(),
     Source_Record_ID: sourceRecordId,
     Data_Mode: settings_getBool('Contest_Demo_Mode', false) ? 'Demo' : ''
   });
   var taskKey = 'NWS_SUSPECTED_FOLLOWUP:' + String(sourceRecordId || scopeId || 'UNKNOWN');
-  if (!nws_openTaskExists_(taskKey)) {
+  var hasCompleteTaskMap = !!openTaskKeys;
+  openTaskKeys = openTaskKeys || {};
+  if (!openTaskKeys[taskKey] && (hasCompleteTaskMap || !nws_openTaskExists_(taskKey))) {
     cattle_appendObject_('Tasks', {
       Task_ID: 'TASK:' + cattle_hashString_(taskKey),
       Task_Key: taskKey,
@@ -467,8 +581,91 @@ function nws_upsertSuspectedAlert_(scopeId, sourceRecordId, observation) {
       Source_Record_ID: sourceRecordId,
       Data_Mode: settings_getBool('Contest_Demo_Mode', false) ? 'Demo' : ''
     });
+    openTaskKeys[taskKey] = true;
   }
   return 1;
+}
+
+function nws_suspectedAlertKey_(scopeId, sourceRecordId) {
+  return 'NWS_SUSPECTED:' + String(sourceRecordId || scopeId || 'UNKNOWN');
+}
+
+function nws_closeClearedSuspectedAlerts_(activeKeys) {
+  var sheet = cattle_getSheet_('Alerts');
+  if (!sheet || sheet.getLastRow() < 2) return;
+  var map = cattle_getHeaderMap_(sheet);
+  cattle_sheetRowsForCurrentMode_('Alerts').forEach(function(row) {
+    var key = String(row.Alert_Key || '');
+    if (key.indexOf('NWS_SUSPECTED:') !== 0 || activeKeys[key]) return;
+    if (/closed|resolved|cancel/i.test(String(row.Status || ''))) return;
+    if (map.Status) sheet.getRange(row._rowNumber, map.Status).setValue('Closed');
+    if (map.Updated_At) sheet.getRange(row._rowNumber, map.Updated_At).setValue(cattle_nowIso_());
+  });
+}
+
+function nws_earlierDate_(candidate, fallback) {
+  var candidateDate = cattle_parseDate_(candidate);
+  var fallbackDate = cattle_parseDate_(fallback);
+  if (!candidateDate) return fallback;
+  if (!fallbackDate || candidateDate.getTime() < fallbackDate.getTime()) {
+    return Utilities.formatDate(candidateDate, CATTLEOS.TIME_ZONE, 'yyyy-MM-dd');
+  }
+  return fallback;
+}
+
+function nws_moreUrgentPriority_(left, right) {
+  var ranks = { Critical: 1, High: 2, Normal: 3 };
+  var leftPriority = ranks[left] ? left : '';
+  var rightPriority = ranks[right] ? right : '';
+  if (!leftPriority) return rightPriority || 'Normal';
+  if (!rightPriority) return leftPriority;
+  return ranks[leftPriority] <= ranks[rightPriority] ? leftPriority : rightPriority;
+}
+
+function nws_dateKey_(value) {
+  var date = cattle_parseDate_(value);
+  return date ? Utilities.formatDate(date, CATTLEOS.TIME_ZONE, 'yyyy-MM-dd') : cattle_normalizeText_(value);
+}
+
+function nws_isWholeHerdInspection_(row) {
+  row = row || {};
+  return String(row.Scope_ID || '').toUpperCase() === 'WHOLE_HERD' ||
+    /whole\s*herd|herd[\s-]*wide|all\s+(animals|cattle)/i.test(String(row.Scope || ''));
+}
+
+function nws_getLastWholeHerdInspectionDate_() {
+  var dates = cattle_sheetRowsForCurrentMode_('Inspections').filter(function(row) {
+    return row.Inspection_Date && nws_isWholeHerdInspection_(row);
+  }).map(function(row) {
+    return cattle_parseDate_(row.Inspection_Date);
+  }).filter(function(date) {
+    return !!date;
+  });
+  if (!dates.length) return null;
+  dates.sort(function(a, b) { return b.getTime() - a.getTime(); });
+  return new Date(dates[0].getTime());
+}
+
+function nws_buildWorkflowSummary_(attention, queue) {
+  queue = queue || nws_buildInspectionQueue();
+  var inspections = cattle_sheetRowsForCurrentMode_('Inspections').filter(function(row) {
+    return cattle_parseDate_(row.Inspection_Date) && nws_isWholeHerdInspection_(row);
+  });
+  inspections.sort(function(a, b) {
+    return cattle_parseDate_(b.Inspection_Date) - cattle_parseDate_(a.Inspection_Date);
+  });
+  var lastDate = inspections.length ? cattle_parseDate_(inspections[0].Inspection_Date) : null;
+  return {
+    lastInspectionSummary: inspections.length
+      ? inspections[0].Inspection_Date + ' — ' + (inspections[0].Scope || 'Inspection')
+      : 'No inspection recorded',
+    animalsNeedingReview: nws_findAnimalsNeedingWoundReview(queue),
+    animalsWithOpenWounds: nws_findAnimalsWithOpenWounds_(queue),
+    overdueWoundFollowUps: queue.filter(function(item) {
+      return item.rank === 6 && item.reason === 'Overdue health follow-up';
+    }).length,
+    nextInspectionDue: nws_nextInspectionDue_(attention, lastDate)
+  };
 }
 
 function nws_attentionColor_(attention) {
@@ -488,9 +685,16 @@ function nws_healthColor_(health) {
 function nws_dashboardBanner_(result) {
   if (!result.zip) return { message: 'Ranch location has not been configured. Enter a five-digit ZIP code to enable ZIP-localized NWS Watch.', background: '#fef3c7', foreground: '#78350f' };
   if (settings_getBool('Contest_Demo_Mode', false)) return { message: 'DEMO DATA — NOT CURRENT OUTBREAK INFORMATION', background: '#fee2e2', foreground: '#991b1b' };
+  if (nws_hasOpenSuspectedAlert_()) return { message: 'Suspicious finding alert is open. Contact a veterinarian and TAHC through official reporting channels.', background: '#991b1b', foreground: '#ffffff' };
   if (result.operational_attention === 'Critical') return { message: 'Critical NWS attention: verify status with TAHC and prioritize wound inspections.', background: '#991b1b', foreground: '#ffffff' };
   if (result.official_data_health === 'Unavailable') return { message: 'Official data unavailable. Verify status directly with TAHC before moving animals.', background: '#e5e7eb', foreground: '#111827' };
   if (result.official_data_health === 'Delayed') return { message: 'Official data delayed. Showing last successful data with visible caveats.', background: '#fef3c7', foreground: '#78350f' };
-  if (nws_createSuspectedCaseAlert() > 0) return { message: 'Suspicious finding alert is open. Contact a veterinarian and TAHC through official reporting channels.', background: '#991b1b', foreground: '#ffffff' };
   return { message: 'NWS Watch ready. Keep inspection records current and verify exact regulatory status with official authorities.', background: '#dcfce7', foreground: '#14532d' };
+}
+
+function nws_hasOpenSuspectedAlert_() {
+  return cattle_sheetRowsForCurrentMode_('Alerts').some(function(row) {
+    return String(row.Alert_Key || '').indexOf('NWS_SUSPECTED:') === 0 &&
+      !/closed|resolved|cancel/i.test(String(row.Status || ''));
+  });
 }

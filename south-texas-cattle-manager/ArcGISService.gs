@@ -1,5 +1,5 @@
 var ARC_FIELD_CANDIDATES = {
-  zone_type: ['zone_type', 'zonetype', 'zone', 'status', 'type', 'category'],
+  zone_type: ['zone_type', 'zonetype', 'zone_name', 'zone_abbr', 'zone', 'status', 'type', 'category'],
   zone_name: ['zone_name', 'zonename', 'name', 'title'],
   county: ['county', 'county_name', 'countyname', 'counties'],
   effective_date: ['effective_date', 'effectivedate', 'start_date', 'startdate', 'order_date'],
@@ -36,7 +36,8 @@ function arc_resolveOperationalLayers(appItemId) {
   });
   var deduped = {};
   layers.forEach(function(layer) {
-    var key = (layer.url || layer.itemId || layer.id || layer.title || '') + ':' + (layer.layerId || '');
+    var key = (layer.url || layer.itemId || layer.id || layer.title || '') + ':' +
+      (layer.layerId || '') + ':' + (layer.definitionExpression || '');
     if (!key || deduped[key]) return;
     deduped[key] = layer;
   });
@@ -61,17 +62,25 @@ function arc_queryLayerGeoJson(layerUrl, options) {
     outSR: options.outSR || '4326',
     f: 'geojson'
   };
+  if (options.geometryPrecision !== undefined) params.geometryPrecision = options.geometryPrecision;
+  if (options.maxAllowableOffset !== undefined) params.maxAllowableOffset = options.maxAllowableOffset;
   var queryUrl = arc_stripTrailingSlash_(layerUrl) + '/query?' + arc_encodeParams_(params);
   var response = arc_fetch_(queryUrl, { sourceKey: 'arcgis-layer-query', allowNonJson: true });
   var text = response.text || '';
   var contentType = response.contentType || '';
   if (response.code >= 200 && response.code < 300 && contentType.indexOf('json') !== -1) {
     var parsed = cattle_parseJsonSafe_(text, null);
-    if (parsed && parsed.type === 'FeatureCollection') return parsed;
+    if (parsed && parsed.type === 'FeatureCollection') {
+      if (parsed.exceededTransferLimit) throw new Error('ArcGIS query exceeded the public layer transfer limit; refusing to evaluate a partial snapshot.');
+      return parsed;
+    }
     if (parsed && parsed.error && /geojson/i.test(parsed.error.message || '')) {
       return arc_queryLayerEsriJson_(layerUrl, options);
     }
-    if (parsed && parsed.features) return parsed;
+    if (parsed && parsed.features) {
+      if (parsed.exceededTransferLimit) throw new Error('ArcGIS query exceeded the public layer transfer limit; refusing to evaluate a partial snapshot.');
+      return parsed;
+    }
   }
   return arc_queryLayerEsriJson_(layerUrl, options);
 }
@@ -85,10 +94,15 @@ function arc_queryLayerEsriJson_(layerUrl, options) {
     outSR: options.outSR || '4326',
     f: 'json'
   };
+  if (options.geometryPrecision !== undefined) params.geometryPrecision = options.geometryPrecision;
+  if (options.maxAllowableOffset !== undefined) params.maxAllowableOffset = options.maxAllowableOffset;
   var queryUrl = arc_stripTrailingSlash_(layerUrl) + '/query?' + arc_encodeParams_(params);
   var parsed = arc_fetchJson_(queryUrl, { sourceKey: 'arcgis-layer-query-json' });
   if (parsed && parsed.error) {
     throw new Error('ArcGIS layer query failed: ' + (parsed.error.message || JSON.stringify(parsed.error)));
+  }
+  if (parsed && parsed.exceededTransferLimit) {
+    throw new Error('ArcGIS query exceeded the public layer transfer limit; refusing to evaluate a partial snapshot.');
   }
   return arc_esriFeatureSetToGeoJson_(parsed);
 }
@@ -134,10 +148,18 @@ function arc_testPublicAccess() {
 
 function arc_buildFieldMapping_(serviceMetadata, sampleAttributes) {
   var fieldLookup = {};
+  var domains = {};
   (serviceMetadata && serviceMetadata.fields ? serviceMetadata.fields : []).forEach(function(field) {
     [field.name, field.alias].forEach(function(name) {
       if (name) fieldLookup[arc_fieldKey_(name)] = field.name;
     });
+    var codedValues = field.domain && field.domain.codedValues ? field.domain.codedValues : [];
+    if (codedValues.length) {
+      domains[field.name] = {};
+      codedValues.forEach(function(entry) {
+        domains[field.name][String(entry.code)] = entry.name;
+      });
+    }
   });
   Object.keys(sampleAttributes || {}).forEach(function(name) {
     fieldLookup[arc_fieldKey_(name)] = name;
@@ -153,6 +175,7 @@ function arc_buildFieldMapping_(serviceMetadata, sampleAttributes) {
       }
     }
   });
+  mapping._domains = domains;
   return mapping;
 }
 
@@ -172,11 +195,18 @@ function arc_fetchJson_(url, options) {
 
 function arc_fetch_(url, options) {
   options = options || {};
+  arc_assertPublicUrl_(url);
   var cacheKey = 'arc:' + cattle_hashString_(url);
   var cacheSeconds = options.cacheSeconds || 0;
   if (cacheSeconds > 0) {
     var cached = CacheService.getScriptCache().get(cacheKey);
-    if (cached) return JSON.parse(cached);
+    if (cached) {
+      try {
+        return JSON.parse(cached);
+      } catch (cacheReadErr) {
+        Logger.log('Ignored malformed ArcGIS script cache entry.');
+      }
+    }
   }
   var response = UrlFetchApp.fetch(url, {
     muteHttpExceptions: true,
@@ -200,7 +230,14 @@ function arc_fetch_(url, options) {
     Logger.log('Raw cache write failed: ' + err.message);
   }
   if (cacheSeconds > 0 && code >= 200 && code < 300) {
-    CacheService.getScriptCache().put(cacheKey, JSON.stringify(payload), cacheSeconds);
+    var serialized = JSON.stringify(payload);
+    if (serialized.length <= CATTLEOS.MAX_SCRIPT_CACHE_CHARS) {
+      try {
+        CacheService.getScriptCache().put(cacheKey, serialized, cacheSeconds);
+      } catch (cacheErr) {
+        Logger.log('ArcGIS script cache write skipped: ' + cacheErr.message);
+      }
+    }
   }
   return payload;
 }
@@ -209,6 +246,7 @@ function arc_esriFeatureSetToGeoJson_(featureSet) {
   var features = featureSet && featureSet.features ? featureSet.features : [];
   return {
     type: 'FeatureCollection',
+    exceededTransferLimit: !!(featureSet && featureSet.exceededTransferLimit),
     features: features.map(function(feature) {
       return {
         type: 'Feature',
@@ -250,6 +288,9 @@ function arc_flattenOperationalLayers_(layers, source) {
       source: source || '',
       visibility: layer.visibility,
       layerType: layer.layerType || '',
+      definitionExpression: layer.layerDefinition && layer.layerDefinition.definitionExpression
+        ? layer.layerDefinition.definitionExpression
+        : (layer.definitionExpression || ''),
       raw: layer
     };
     if (normalized.url || normalized.itemId || normalized.title) out.push(normalized);
@@ -284,7 +325,9 @@ function arc_identifyLayerRole_(layer) {
 
 function arc_findMappedValue_(attributes, mapping, concept) {
   var field = mapping && mapping[concept];
-  if (field && Object.prototype.hasOwnProperty.call(attributes, field)) return attributes[field];
+  if (field && Object.prototype.hasOwnProperty.call(attributes, field)) {
+    return arc_decodeDomainValue_(attributes[field], mapping, field);
+  }
   var candidates = ARC_FIELD_CANDIDATES[concept] || [];
   var lowered = {};
   Object.keys(attributes || {}).forEach(function(key) {
@@ -295,6 +338,13 @@ function arc_findMappedValue_(attributes, mapping, concept) {
     if (Object.prototype.hasOwnProperty.call(lowered, candidate)) return lowered[candidate];
   }
   return '';
+}
+
+function arc_decodeDomainValue_(value, mapping, field) {
+  var domain = mapping && mapping._domains ? mapping._domains[field] : null;
+  return domain && Object.prototype.hasOwnProperty.call(domain, String(value))
+    ? domain[String(value)]
+    : value;
 }
 
 function arc_findObjectId_(attributes, index) {
@@ -317,4 +367,11 @@ function arc_encodeParams_(params) {
 
 function arc_stripTrailingSlash_(url) {
   return String(url || '').replace(/\/+$/, '');
+}
+
+function arc_assertPublicUrl_(url) {
+  var value = String(url || '');
+  if (!/^https:\/\/(?:[a-z0-9-]+\.)*arcgis\.com(?::\d+)?(?:\/|$)/i.test(value)) {
+    throw new Error('ArcGIS adapter refused a non-ArcGIS or non-HTTPS URL.');
+  }
 }

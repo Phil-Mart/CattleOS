@@ -35,12 +35,13 @@ Small cattle producers often manage valuable animals, health records, forage, ex
 
 - Click **Generate Mock Ranch Brief** for the demo path.
 - Show urgent actions, animals to review, and source record IDs.
-- Explain live mode: set an OpenAI API key in User Properties, disable mock mode, then call GPT-5.6 through the Responses API.
+- Explain live mode: save an OpenAI API key, then use **Generate Live GPT-5.6 Ranch Brief**. The explicit live action does not require disabling mock mode.
+- Mention that live requests use `store: false` and require confirmation before a reviewed suspected-record summary is sent.
 - Emphasize that deterministic code calculates location/risk and GPT-5.6 summarizes only grounded input.
 
 ## 2:15-2:40 — Codex and Credibility
 
 - Show the repository structure.
-- Mention that Codex built the adapters, migration, risk engine, UI, tests, and docs from the spec.
+- Mention that Codex built the adapters, migration, risk engine, UI, tests, and docs from the available spec.
 - Show `docs/BUILD_WEEK_PROVENANCE.md`.
 - Close with the product promise: localized, practical inspection workflows without replacing veterinarians or animal-health authorities.

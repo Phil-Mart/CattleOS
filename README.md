@@ -18,8 +18,8 @@ The workspace was empty except for git metadata when Codex began. The Version 1.
 - Current, delayed, unavailable, and demo data-health states.
 - Deterministic geospatial risk engine for Polygon, MultiPolygon, holes, boundaries, Esri JSON conversion, and distances.
 - Inspection queue and deduplicated task/alert automation for wounds and suspected findings.
-- GPT-5.6 Ranch Brief through the OpenAI Responses API, with mock mode and deterministic fallback.
-- Contest demo scenario and automated tests.
+- GPT-5.6 Ranch Brief through the OpenAI Responses API, with explicit live/mock actions, structured-output validation, and deterministic fallback.
+- Mode-isolated contest demo scenario and automated tests.
 
 ## Install
 
@@ -54,7 +54,9 @@ It seeds a sample ZIP, simulated official zone geometry, a nearby simulated case
 
 Use **Cattle Manager → New World Screwworm Watch → Refresh Official NWS Data**.
 
-The TAHC adapter discovers the ArcGIS app and operational layers, maps fields by names and aliases, and queries public layers when available. If public layers require authentication or schemas change, CattleOS switches to degraded/delayed/unavailable states, preserves last-known-good data when present, and links the official TAHC map.
+The TAHC adapter discovers the ArcGIS app and operational layers, preserves each web-map `definitionExpression`, decodes coded-value field domains, and queries public layers when available. Complete zone refreshes are atomic. Geometry is requested at six-decimal precision with a maximum generalization offset of `0.00015` degrees (about 17 meters), then stored as JSON or lossless gzip/base64 so complete polygons fit Google Sheets cells. Boundary-adjacent properties still require verification on the official TAHC map.
+
+If public layers require authentication, a zone layer is incomplete, or schemas change, CattleOS switches to degraded/delayed/unavailable states, preserves last-known-good data when present, and links the official TAHC map.
 
 The USDA adapter looks for structured public endpoints from the official dashboard page. If none are found, CattleOS uses the official USDA dashboard link instead of scraping rendered text as a live data source.
 
@@ -69,11 +71,12 @@ OpenAI_Mock_Mode = TRUE
 For live GPT-5.6:
 
 1. Use **Cattle Manager → Ranch Brief → Set OpenAI API Key**.
-2. Set `OpenAI_Enabled` to `TRUE`.
-3. Set `OpenAI_Mock_Mode` to `FALSE`.
-4. Use **Generate GPT-5.6 Ranch Brief**.
+2. Optionally use **Test OpenAI Connection**.
+3. Use **Generate Live GPT-5.6 Ranch Brief**.
 
-The API key is stored only in Apps Script User Properties. It is not written to any sheet or log.
+Saving the key enables live mode. The explicit live command does not require changing `OpenAI_Mock_Mode`; that setting controls the compatibility handler while the mock command remains available for demos. If suspected-event records are in scope, CattleOS shows the reviewed fields and requires confirmation before sending the summary. Exact observation text, coordinates, owner information, and ZIP are withheld by default.
+
+The API key is stored only in Apps Script User Properties. It is not written to any sheet or log. Responses API requests set `store: false`.
 
 ## Tests
 
@@ -89,13 +92,15 @@ Apps Script tests:
 Cattle Manager → Demo & Testing → Run All Tests
 ```
 
-The local runner validates syntax for all `.gs` files and runs 51 pure tests. Apps Script integration tests additionally verify workbook setup, named range creation, migration idempotence, and sheet structure.
+The local runner validates syntax for all `.gs` files, compiles all HTML client scripts, and runs 100 pure tests, 5 HTML checks, and 3 checked-in fixture checks. Apps Script integration tests additionally verify workbook setup, named range creation, migration idempotence, and sheet structure.
 
 ## Safety Boundary
 
 ZIP-based results are approximate and use a ZIP-code centroid unless exact coordinates are supplied. Official zones may cover only part of a county. Verify current restrictions and exact property status with the Texas Animal Health Commission before moving animals.
 
 CattleOS never diagnoses New World screwworm, identifies larvae as confirmed, prescribes treatment or dosage, determines legal movement permission, submits regulatory reports, or treats user observations as official detections.
+
+Script-generated external text is forced to plain cell content so it cannot become a Google Sheets formula.
 
 ## Submission Docs
 
@@ -105,4 +110,4 @@ CattleOS never diagnoses New World screwworm, identifies larvae as confirmed, pr
 - `docs/DATA_SOURCES.md`
 - `docs/SAFETY_AND_LIMITATIONS.md`
 
-`/feedback` Session ID placeholder is in `docs/BUILD_WEEK_PROVENANCE.md`.
+The primary Codex task ID and separate `/feedback` Session ID instructions are in `docs/BUILD_WEEK_PROVENANCE.md`.

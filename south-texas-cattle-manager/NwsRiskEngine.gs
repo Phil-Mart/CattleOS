@@ -26,15 +26,19 @@ function risk_pointOnBoundary(point, ring) {
   var p = risk_normalizePoint_(point);
   if (!p.valid || !ring || ring.length < 2) return false;
   var epsilon = 1e-9;
-  for (var i = 0; i < ring.length - 1; i++) {
+  for (var i = 0; i < ring.length; i++) {
     var a = risk_normalizePoint_(ring[i]);
-    var b = risk_normalizePoint_(ring[i + 1]);
+    var b = risk_normalizePoint_(ring[(i + 1) % ring.length]);
     if (!a.valid || !b.valid) continue;
+    var squaredLength = Math.pow(b.lng - a.lng, 2) + Math.pow(b.lat - a.lat, 2);
+    if (squaredLength <= epsilon * epsilon) {
+      if (Math.abs(p.lng - a.lng) <= epsilon && Math.abs(p.lat - a.lat) <= epsilon) return true;
+      continue;
+    }
     var cross = (p.lng - a.lng) * (b.lat - a.lat) - (p.lat - a.lat) * (b.lng - a.lng);
     if (Math.abs(cross) > epsilon) continue;
     var dot = (p.lng - a.lng) * (b.lng - a.lng) + (p.lat - a.lat) * (b.lat - a.lat);
     if (dot < -epsilon) continue;
-    var squaredLength = Math.pow(b.lng - a.lng, 2) + Math.pow(b.lat - a.lat, 2);
     if (dot - squaredLength <= epsilon) return true;
   }
   return false;
@@ -71,7 +75,8 @@ function risk_evaluateRanchNwsStatus(location, zones, cases, dataHealth) {
   var health = risk_normalizeDataHealth_(dataHealth);
   var caveats = [
     'ZIP centroid is not the exact ranch location',
-    'Official zones may cover only part of a county'
+    'Official zones may cover only part of a county',
+    'Workbook zone geometry may be generalized by about 17 meters; verify boundary-adjacent properties on the official TAHC map'
   ];
   var sourceLinks = [
     { label: 'Texas Animal Health Commission NWS page', url: CATTLEOS.TAHC_PAGE_URL },
@@ -82,7 +87,7 @@ function risk_evaluateRanchNwsStatus(location, zones, cases, dataHealth) {
     zip: location && location.zip ? String(location.zip) : '',
     city: location && location.city ? String(location.city) : '',
     county: location && location.county ? String(location.county) : '',
-    state: location && location.state ? String(location.state).toUpperCase() : '',
+    state: location && location.state ? cattle_normalizeText_(location.state).toUpperCase() : '',
     latitude: location ? location.latitude : null,
     longitude: location ? location.longitude : null,
     location_source: location && location.location_source ? location.location_source : '',
@@ -101,9 +106,16 @@ function risk_evaluateRanchNwsStatus(location, zones, cases, dataHealth) {
   };
 
   var point = risk_normalizePoint_(location || {});
-  if (!result.zip && !point.valid) {
+  var zipValidation = loc_validateZip(result.zip);
+  if (!zipValidation.valid) {
     result.official_zone_status = 'Unknown';
-    result.explanation = 'Ranch ZIP or coordinates are not configured.';
+    result.explanation = 'A valid five-digit ranch ZIP is required before location-specific NWS results can be evaluated.';
+    return result;
+  }
+  result.zip = zipValidation.zip;
+  if (!result.state) {
+    result.official_zone_status = 'Unknown';
+    result.explanation = 'The ranch state could not be resolved from the configured location.';
     return result;
   }
   if (result.state && result.state !== 'TX') {
@@ -125,16 +137,24 @@ function risk_evaluateRanchNwsStatus(location, zones, cases, dataHealth) {
     result.explanation = 'Location could not be resolved to coordinates.';
     return result;
   }
+  if (!cattle_normalizeCounty_(result.county)) {
+    result.official_zone_status = 'Unknown';
+    result.operational_attention = 'Data Unavailable';
+    result.explanation = 'The ranch county could not be resolved, so county-level official zone records cannot be evaluated safely.';
+    return result;
+  }
 
   var county = cattle_normalizeCounty_(result.county);
   var insideInfested = false;
   var insideSurveillance = false;
+  var insideUnclassifiedZone = false;
   var countyInfested = false;
   var countyAnyZone = false;
   var partialCountyUncertain = false;
   var relevantZoneNames = [];
 
   (zones || []).forEach(function(zone) {
+    if (!risk_zoneIsActive_(zone)) return;
     var zoneType = risk_normalizeZoneType_(zone.Zone_Type || zone.zone_type || zone.type);
     var zoneCountyText = zone.County_Names || zone.county || zone.County || '';
     var zoneCountyMatch = risk_countyListMatches_(zoneCountyText, county);
@@ -152,7 +172,8 @@ function risk_evaluateRanchNwsStatus(location, zones, cases, dataHealth) {
     if (contains) {
       relevantZoneNames.push(zone.Zone_Name || zone.zone_name || zoneType);
       if (zoneType === 'Infested Zone') insideInfested = true;
-      else insideSurveillance = true;
+      else if (zoneType === 'Surveillance Zone') insideSurveillance = true;
+      else insideUnclassifiedZone = true;
     }
     if (!hasGeometry && zoneCountyMatch && zoneType === 'Infested Zone') {
       relevantZoneNames.push(zone.Zone_Name || 'County-level infested zone');
@@ -177,6 +198,10 @@ function risk_evaluateRanchNwsStatus(location, zones, cases, dataHealth) {
     result.official_zone_status = 'Inside Mapped Surveillance Zone';
     result.operational_attention = 'Heightened';
     result.explanation = 'Configured location appears inside an official surveillance or adjacent zone.';
+  } else if (insideUnclassifiedZone) {
+    result.official_zone_status = 'Unknown';
+    result.operational_attention = 'Data Unavailable';
+    result.explanation = 'An official polygon contains the configured location, but its zone type could not be interpreted safely. Verify status on the official TAHC map.';
   } else if (countyAnyZone || partialCountyUncertain) {
     result.official_zone_status = 'Affected County — Exact Position Uncertain';
     result.operational_attention = 'Heightened';
@@ -216,12 +241,20 @@ function risk_geometryContainsPoint_(geometry, point) {
 function risk_esriGeometryToGeoJson(esriGeometry) {
   if (!esriGeometry) return null;
   if (esriGeometry.x !== undefined && esriGeometry.y !== undefined) {
-    return { type: 'Point', coordinates: [Number(esriGeometry.x), Number(esriGeometry.y)] };
+    var point = risk_normalizePoint_([esriGeometry.x, esriGeometry.y]);
+    return point.valid ? { type: 'Point', coordinates: [point.lng, point.lat] } : null;
   }
   if (esriGeometry.rings) {
-    return { type: 'Polygon', coordinates: esriGeometry.rings.map(function(ring) {
+    var rings = esriGeometry.rings.map(function(ring) {
       return risk_closeRing_(ring);
-    }) };
+    }).filter(function(ring) {
+      return ring.length >= 4 && ring.every(function(point) { return risk_normalizePoint_(point).valid; });
+    });
+    var polygons = risk_groupEsriRings_(rings);
+    if (!polygons.length) return null;
+    return polygons.length === 1
+      ? { type: 'Polygon', coordinates: polygons[0] }
+      : { type: 'MultiPolygon', coordinates: polygons };
   }
   if (esriGeometry.paths) {
     return { type: 'MultiLineString', coordinates: esriGeometry.paths };
@@ -231,18 +264,26 @@ function risk_esriGeometryToGeoJson(esriGeometry) {
 
 function risk_normalizePoint_(point) {
   if (point == null) return { valid: false };
+  function blank(value) {
+    return value === null || value === undefined || typeof value === 'boolean' || String(value).trim() === '';
+  }
+  var rawLng;
+  var rawLat;
   var lng;
   var lat;
   if (Array.isArray(point)) {
-    lng = Number(point[0]);
-    lat = Number(point[1]);
+    rawLng = point[0];
+    rawLat = point[1];
   } else if (point.coordinates && Array.isArray(point.coordinates)) {
-    lng = Number(point.coordinates[0]);
-    lat = Number(point.coordinates[1]);
+    rawLng = point.coordinates[0];
+    rawLat = point.coordinates[1];
   } else {
-    lat = Number(point.latitude !== undefined ? point.latitude : point.lat);
-    lng = Number(point.longitude !== undefined ? point.longitude : point.lng);
+    rawLat = point.latitude !== undefined ? point.latitude : point.lat;
+    rawLng = point.longitude !== undefined ? point.longitude : point.lng;
   }
+  if (blank(rawLat) || blank(rawLng)) return { valid: false };
+  lat = Number(rawLat);
+  lng = Number(rawLng);
   var valid = isFinite(lat) && isFinite(lng) && Math.abs(lat) <= 90 && Math.abs(lng) <= 180;
   return { lat: lat, lng: lng, latitude: lat, longitude: lng, valid: valid };
 }
@@ -283,7 +324,7 @@ function risk_featureGeometry_(feature) {
   if (feature.type && feature.coordinates) return feature;
   if (feature.geometry) return feature.geometry.type ? feature.geometry : risk_esriGeometryToGeoJson(feature.geometry);
   var json = feature.Geometry_GeoJSON || feature.geometry_geojson || feature.Geometry || '';
-  if (typeof json === 'string' && json) return cattle_parseJsonSafe_(json, null);
+  if (typeof json === 'string' && json) return nws_parseGeometryCell_(json);
   return null;
 }
 
@@ -291,6 +332,24 @@ function risk_distanceToGeometryMiles_(point, geometry) {
   if (!geometry) return null;
   if (risk_geometryContainsPoint_(geometry, point)) return 0;
   if (geometry.type === 'Point') return risk_haversineMiles(point, geometry.coordinates);
+  if (geometry.type === 'Polygon') return risk_minDistanceToRings_(point, geometry.coordinates || []);
+  if (geometry.type === 'MultiPolygon') {
+    var polygonMin = null;
+    (geometry.coordinates || []).forEach(function(polygon) {
+      var distance = risk_minDistanceToRings_(point, polygon || []);
+      if (distance !== null && (polygonMin === null || distance < polygonMin)) polygonMin = distance;
+    });
+    return polygonMin;
+  }
+  if (geometry.type === 'LineString') return risk_minDistanceToPath_(point, geometry.coordinates || []);
+  if (geometry.type === 'MultiLineString') {
+    var lineMin = null;
+    (geometry.coordinates || []).forEach(function(path) {
+      var distance = risk_minDistanceToPath_(point, path || []);
+      if (distance !== null && (lineMin === null || distance < lineMin)) lineMin = distance;
+    });
+    return lineMin;
+  }
   var coords = risk_flattenCoordinates_(geometry.coordinates || []);
   var min = null;
   for (var i = 0; i < coords.length; i++) {
@@ -298,6 +357,49 @@ function risk_distanceToGeometryMiles_(point, geometry) {
     if (distance !== null && (min === null || distance < min)) min = distance;
   }
   return min;
+}
+
+function risk_minDistanceToRings_(point, rings) {
+  var min = null;
+  (rings || []).forEach(function(ring) {
+    var distance = risk_minDistanceToPath_(point, ring, true);
+    if (distance !== null && (min === null || distance < min)) min = distance;
+  });
+  return min;
+}
+
+function risk_minDistanceToPath_(point, path, closePath) {
+  if (!path || !path.length) return null;
+  if (path.length === 1) return risk_haversineMiles(point, path[0]);
+  var min = null;
+  var segmentCount = closePath ? path.length : path.length - 1;
+  for (var i = 0; i < segmentCount; i++) {
+    var next = (i + 1) % path.length;
+    var distance = risk_distancePointToSegmentMiles_(point, path[i], path[next]);
+    if (distance !== null && (min === null || distance < min)) min = distance;
+  }
+  return min;
+}
+
+function risk_distancePointToSegmentMiles_(point, segmentStart, segmentEnd) {
+  var p = risk_normalizePoint_(point);
+  var a = risk_normalizePoint_(segmentStart);
+  var b = risk_normalizePoint_(segmentEnd);
+  if (!p.valid || !a.valid || !b.valid) return null;
+  var milesPerLatitudeDegree = 69.0;
+  var milesPerLongitudeDegree = 69.172 * Math.cos(risk_toRadians_(p.lat));
+  var ax = (a.lng - p.lng) * milesPerLongitudeDegree;
+  var ay = (a.lat - p.lat) * milesPerLatitudeDegree;
+  var bx = (b.lng - p.lng) * milesPerLongitudeDegree;
+  var by = (b.lat - p.lat) * milesPerLatitudeDegree;
+  var dx = bx - ax;
+  var dy = by - ay;
+  var lengthSquared = dx * dx + dy * dy;
+  if (lengthSquared === 0) return risk_haversineMiles(p, a);
+  var t = Math.max(0, Math.min(1, -(ax * dx + ay * dy) / lengthSquared));
+  var nearestX = ax + t * dx;
+  var nearestY = ay + t * dy;
+  return Math.sqrt(nearestX * nearestX + nearestY * nearestY);
 }
 
 function risk_flattenCoordinates_(coords) {
@@ -333,15 +435,32 @@ function risk_countyListMatches_(zoneCountyText, county) {
   if (!county) return false;
   var text = cattle_normalizeText_(zoneCountyText);
   if (!text) return false;
-  return text.split(/[,;/|]+/).some(function(part) {
+  return text.split(/[,;/|]+|\s+and\s+|\s*&\s*/i).some(function(part) {
     return cattle_normalizeCounty_(part) === county;
   }) || cattle_normalizeCounty_(text) === county;
 }
 
 function risk_hasMappableCountyZone_(zones, county) {
   return (zones || []).some(function(zone) {
-    return risk_countyListMatches_(zone.County_Names || zone.county || zone.County || '', county) && !!risk_featureGeometry_(zone);
+    return risk_zoneIsActive_(zone) &&
+      risk_countyListMatches_(zone.County_Names || zone.county || zone.County || '', county) &&
+      !!risk_featureGeometry_(zone);
   });
+}
+
+function risk_zoneIsActive_(zone) {
+  zone = zone || {};
+  var status = cattle_normalizeText_(zone.Official_Status || zone.official_status || zone.status).toLowerCase();
+  if (/\b(inactive|expired|released|ended|archived|closed)\b/.test(status) || /^(false|0|no)$/.test(status)) return false;
+  var now = new Date();
+  var effective = cattle_parseDate_(zone.Effective_Date || zone.effective_date);
+  var end = cattle_parseDate_(zone.End_Date || zone.end_date);
+  if (effective && effective.getTime() > now.getTime()) return false;
+  if (end) {
+    end.setHours(23, 59, 59, 999);
+    if (end.getTime() < now.getTime()) return false;
+  }
+  return true;
 }
 
 function risk_normalizeZoneType_(type) {
@@ -368,4 +487,55 @@ function risk_closeRing_(ring) {
   var last = ring[ring.length - 1];
   if (first[0] === last[0] && first[1] === last[1]) return ring;
   return ring.concat([[first[0], first[1]]]);
+}
+
+function risk_groupEsriRings_(rings) {
+  var nodes = (rings || []).map(function(ring) {
+    return {
+      ring: ring,
+      area: Math.abs(risk_ringArea_(ring)),
+      parent: -1,
+      depth: 0,
+      polygonIndex: -1
+    };
+  }).filter(function(node) {
+    return node.area > 0;
+  }).sort(function(a, b) {
+    return b.area - a.area;
+  });
+
+  for (var i = 0; i < nodes.length; i++) {
+    var point = nodes[i].ring[0];
+    var parent = -1;
+    for (var j = 0; j < i; j++) {
+      if (!risk_pointInRing_(risk_normalizePoint_(point), nodes[j].ring) && !risk_pointOnBoundary(point, nodes[j].ring)) continue;
+      if (parent === -1 || nodes[j].area < nodes[parent].area) parent = j;
+    }
+    nodes[i].parent = parent;
+    nodes[i].depth = parent === -1 ? 0 : nodes[parent].depth + 1;
+  }
+
+  var polygons = [];
+  nodes.forEach(function(node, index) {
+    if (node.depth % 2 === 0) {
+      node.polygonIndex = polygons.length;
+      polygons.push([node.ring]);
+      return;
+    }
+    var ancestor = node.parent;
+    while (ancestor !== -1 && nodes[ancestor].depth % 2 !== 0) ancestor = nodes[ancestor].parent;
+    if (ancestor !== -1 && nodes[ancestor].polygonIndex !== -1) {
+      polygons[nodes[ancestor].polygonIndex].push(node.ring);
+    }
+  });
+  return polygons;
+}
+
+function risk_ringArea_(ring) {
+  var area = 0;
+  for (var i = 0; i < (ring || []).length - 1; i++) {
+    area += Number(ring[i][0]) * Number(ring[i + 1][1]) -
+      Number(ring[i + 1][0]) * Number(ring[i][1]);
+  }
+  return area / 2;
 }
