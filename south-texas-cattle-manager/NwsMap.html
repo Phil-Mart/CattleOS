@@ -1,0 +1,133 @@
+<!doctype html>
+<html>
+  <head>
+    <base target="_top">
+    <style>
+      body { margin: 0; font-family: Arial, sans-serif; color: #172033; background: #f8fafc; }
+      header { padding: 14px 16px; background: #164e63; color: white; }
+      h1 { margin: 0; font-size: 18px; }
+      .meta { font-size: 12px; opacity: .9; margin-top: 4px; }
+      .notice { padding: 10px 16px; background: #fef2f2; color: #7f1d1d; font-size: 13px; line-height: 1.35; }
+      .wrap { display: grid; grid-template-columns: 1fr 240px; gap: 12px; padding: 12px; }
+      svg { width: 100%; height: 420px; background: #e0f2fe; border: 1px solid #cbd5e1; border-radius: 6px; }
+      aside { background: white; border: 1px solid #cbd5e1; border-radius: 6px; padding: 12px; font-size: 13px; }
+      .row { margin-bottom: 9px; }
+      .label { color: #475569; font-size: 11px; text-transform: uppercase; letter-spacing: .04em; }
+      .value { font-weight: 700; }
+      a { color: #0369a1; font-weight: 700; }
+      .legend { display: grid; gap: 6px; margin-top: 8px; }
+      .legend span { display: inline-block; width: 12px; height: 12px; border-radius: 50%; margin-right: 6px; vertical-align: -1px; }
+      .poly { border-radius: 2px !important; }
+      @media (max-width: 700px) { .wrap { grid-template-columns: 1fr; } svg { height: 340px; } }
+    </style>
+  </head>
+  <body>
+    <header>
+      <h1>CattleOS NWS Map</h1>
+      <div class="meta" id="meta"></div>
+    </header>
+    <div class="notice" id="notice"></div>
+    <div class="wrap">
+      <svg id="map" viewBox="0 0 800 420" role="img" aria-label="Local NWS map"></svg>
+      <aside>
+        <div class="row"><div class="label">Official zone status</div><div class="value" id="zone"></div></div>
+        <div class="row"><div class="label">Operational attention</div><div class="value" id="attention"></div></div>
+        <div class="row"><div class="label">Location</div><div class="value" id="location"></div></div>
+        <div class="row"><div class="label">Nearest confirmed detection</div><div class="value" id="nearest"></div></div>
+        <div class="row"><div class="label">Data health</div><div class="value" id="health"></div></div>
+        <div class="row"><a id="tahc" target="_blank" rel="noopener">Open official TAHC map</a></div>
+        <div class="row"><a id="usda" target="_blank" rel="noopener">Open USDA dashboard</a></div>
+        <div class="legend">
+          <div><span style="background:#0f766e"></span>Ranch location</div>
+          <div><span class="poly" style="background:#ef4444"></span>Official infested zone</div>
+          <div><span class="poly" style="background:#f59e0b"></span>Official adjacent/surveillance zone</div>
+          <div><span style="background:#7c3aed"></span>Confirmed animal case</div>
+          <div><span style="background:#0369a1"></span>Confirmed wild-fly detection</div>
+          <div><span style="background:#94a3b8"></span>Data unavailable</div>
+        </div>
+      </aside>
+    </div>
+    <script>
+      const data = <?!= mapJson ?>;
+      const result = data.result || {};
+      document.getElementById('notice').textContent = data.safetyNotice;
+      document.getElementById('meta').textContent = `Generated ${data.generatedAt || ''} · ${result.location_source || 'Location not configured'}`;
+      document.getElementById('zone').textContent = result.official_zone_status || 'Unknown';
+      document.getElementById('attention').textContent = result.operational_attention || 'Data Unavailable';
+      document.getElementById('location').textContent = [result.city, result.county, result.state, result.zip].filter(Boolean).join(', ') || 'Not configured';
+      document.getElementById('nearest').textContent = Number.isFinite(result.nearest_detection_miles) ? `${result.nearest_detection_miles.toFixed(1)} miles` : 'Data unavailable';
+      document.getElementById('health').textContent = result.official_data_health || 'Not Initialized';
+      document.getElementById('tahc').href = data.tahcUrl;
+      document.getElementById('usda').href = data.usdaUrl;
+
+      const svg = document.getElementById('map');
+      const points = [];
+      if (Number.isFinite(result.latitude) && Number.isFinite(result.longitude)) points.push([result.longitude, result.latitude]);
+      (data.cases || []).forEach(c => points.push([c.longitude, c.latitude]));
+      (data.zones || []).forEach(z => flatten(z.geometry && z.geometry.coordinates).forEach(p => points.push(p)));
+      const bbox = bounds(points);
+      drawBase();
+      (data.zones || []).forEach(drawZone);
+      (data.cases || []).forEach(drawCase);
+      drawRanch();
+
+      function bounds(list) {
+        if (!list.length) return { minX: -100, maxX: -96, minY: 26, maxY: 30 };
+        let xs = list.map(p => Number(p[0])).filter(Number.isFinite);
+        let ys = list.map(p => Number(p[1])).filter(Number.isFinite);
+        let minX = Math.min(...xs), maxX = Math.max(...xs), minY = Math.min(...ys), maxY = Math.max(...ys);
+        const padX = Math.max((maxX - minX) * .2, .25);
+        const padY = Math.max((maxY - minY) * .2, .25);
+        return { minX: minX - padX, maxX: maxX + padX, minY: minY - padY, maxY: maxY + padY };
+      }
+      function project(coord) {
+        const x = (Number(coord[0]) - bbox.minX) / (bbox.maxX - bbox.minX) * 760 + 20;
+        const y = 400 - ((Number(coord[1]) - bbox.minY) / (bbox.maxY - bbox.minY) * 380 + 10);
+        return [x, y];
+      }
+      function flatten(coords) {
+        if (!Array.isArray(coords)) return [];
+        if (typeof coords[0] === 'number') return [coords];
+        return coords.flatMap(flatten);
+      }
+      function make(tag, attrs) {
+        const el = document.createElementNS('http://www.w3.org/2000/svg', tag);
+        Object.keys(attrs || {}).forEach(k => el.setAttribute(k, attrs[k]));
+        svg.appendChild(el);
+        return el;
+      }
+      function drawBase() {
+        make('rect', { x: 0, y: 0, width: 800, height: 420, fill: '#e0f2fe' });
+        make('text', { x: 24, y: 32, fill: '#334155', 'font-size': 13 }).textContent = 'Approximate local overlay. Verify exact status on official map.';
+      }
+      function drawZone(zone) {
+        const geom = zone.geometry;
+        if (!geom || !geom.coordinates) return;
+        const polygons = geom.type === 'MultiPolygon' ? geom.coordinates : [geom.coordinates];
+        polygons.forEach(poly => {
+          const ring = poly[0] || [];
+          const d = ring.map((p, i) => {
+            const xy = project(p);
+            return `${i ? 'L' : 'M'}${xy[0].toFixed(1)},${xy[1].toFixed(1)}`;
+          }).join(' ') + ' Z';
+          const infested = /infested/i.test(zone.type || '');
+          make('path', { d, fill: infested ? '#ef444455' : '#f59e0b55', stroke: infested ? '#dc2626' : '#d97706', 'stroke-width': 2 });
+        });
+      }
+      function drawCase(c) {
+        const xy = project([c.longitude, c.latitude]);
+        const fly = /fly/i.test(c.type || '');
+        make('circle', { cx: xy[0], cy: xy[1], r: 6, fill: fly ? '#0369a1' : '#7c3aed', stroke: 'white', 'stroke-width': 2 });
+      }
+      function drawRanch() {
+        if (!Number.isFinite(result.latitude) || !Number.isFinite(result.longitude)) {
+          make('text', { x: 300, y: 210, fill: '#475569', 'font-size': 16 }).textContent = 'Location not configured';
+          return;
+        }
+        const xy = project([result.longitude, result.latitude]);
+        make('circle', { cx: xy[0], cy: xy[1], r: 9, fill: '#0f766e', stroke: 'white', 'stroke-width': 3 });
+        make('text', { x: xy[0] + 12, y: xy[1] - 10, fill: '#064e3b', 'font-size': 13, 'font-weight': 700 }).textContent = result.location_source || 'Ranch location';
+      }
+    </script>
+  </body>
+</html>

@@ -1,0 +1,259 @@
+function test_runAll() {
+  var results = [];
+  [
+    test_zipHandling_,
+    test_geometry_,
+    test_riskEngine_,
+    test_arcgisAdapter_,
+    test_gptValidation_
+  ].forEach(function(testFn) {
+    results = results.concat(testFn());
+  });
+  try {
+    results = results.concat(test_runIntegrationSmokeTest());
+  } catch (err) {
+    results.push(test_result_(false, 'Workbook integration smoke test', err.message));
+  }
+  test_logResults_(results);
+  var failed = results.filter(function(row) { return !row.pass; });
+  if (failed.length) {
+    cattle_uiAlert_('CattleOS Tests', failed.length + ' test(s) failed. See Audit_Log for details.');
+    throw new Error(failed.length + ' CattleOS test(s) failed.');
+  }
+  cattle_uiAlert_('CattleOS Tests', 'All ' + results.length + ' tests passed.');
+  return results;
+}
+
+function test_runPureUnitTests() {
+  var results = []
+    .concat(test_zipHandling_())
+    .concat(test_geometry_())
+    .concat(test_riskEngine_())
+    .concat(test_arcgisAdapter_())
+    .concat(test_gptValidation_());
+  var failed = results.filter(function(row) { return !row.pass; });
+  if (failed.length) throw new Error(failed.map(function(row) { return row.name + ': ' + row.message; }).join('\n'));
+  return results;
+}
+
+function test_runIntegrationSmokeTest() {
+  var results = [];
+  setup_initializeWorkbook({ showOnboarding: false, reason: 'integration smoke test' });
+  results.push(test_assert_('Dashboard sheet exists', !!cattle_getSheet_('Dashboard')));
+  results.push(test_assert_('NWS_Watch sheet exists', !!cattle_getSheet_('NWS_Watch')));
+  results.push(test_assert_('Settings sheet exists', !!cattle_getSheet_('Settings')));
+  results.push(test_assert_('RANCH_ZIP_INPUT named range exists', !!cattle_getSpreadsheet_().getRangeByName('RANCH_ZIP_INPUT')));
+  results.push(test_assert_('Ranch_ZIP setting exists', settings_findRow_('Ranch_ZIP') > 0));
+  results.push(test_assert_('NWS hidden zones sheet exists', !!cattle_getSheet_('NWS_Official_Zones')));
+  var before = settings_get('Schema_Version');
+  migration_runV11({ showOnboarding: false });
+  results.push(test_assert_('Migration keeps schema version 1.1', settings_get('Schema_Version') === CATTLEOS.VERSION));
+  results.push(test_assert_('Migration did not blank schema version', before === '' || settings_get('Schema_Version') === CATTLEOS.VERSION));
+  test_logResults_(results);
+  return results;
+}
+
+function test_zipHandling_() {
+  var results = [];
+  results.push(test_assert_('ZIP 78026 valid', loc_validateZip('78026').valid));
+  results.push(test_assert_('Leading-zero ZIP preserved as string', loc_validateZip('02108').zip === '02108'));
+  results.push(test_assert_('Whitespace trimmed', loc_validateZip(' 78026 ').zip === '78026'));
+  results.push(test_assert_('Numeric 2108 pads to 02108', loc_validateZip(2108).zip === '02108'));
+  results.push(test_assert_('Four-digit string rejected', !loc_validateZip('2108').valid));
+  results.push(test_assert_('Six-digit ZIP rejected', !loc_validateZip('123456').valid));
+  results.push(test_assert_('ZIP+4 rejected', !loc_validateZip('78026-1234').valid));
+  results.push(test_assert_('Letters rejected', !loc_validateZip('ABCDE').valid));
+  results.push(test_assert_('Blank ZIP rejected', !loc_validateZip('').valid));
+  var geocoded = loc_geocodeZip('02108', test_geocoderFixture_('02108', 'Boston', 'Suffolk County', 'MA', 42.358, -71.064));
+  results.push(test_assert_('Geocoder parses city', geocoded.city === 'Boston'));
+  results.push(test_assert_('Geocoder parses county', geocoded.county === 'Suffolk County'));
+  results.push(test_assert_('Geocoder labels ZIP centroid', geocoded.location_source === 'ZIP Centroid'));
+  var texas = loc_geocodeZip('78026', test_geocoderFixture_('78026', 'Jourdanton', 'Atascosa County', 'TX', 28.92, -98.54));
+  results.push(test_assert_('Texas ZIP parses TX state', texas.state === 'TX'));
+  var missingCounty = loc_geocodeZip('78026', test_geocoderFixture_('78026', 'Jourdanton', '', 'TX', 28.92, -98.54));
+  results.push(test_assert_('County can be blank without guessing', missingCounty.county === ''));
+  return results;
+}
+
+function test_geometry_() {
+  var results = [];
+  var polygon = { type: 'Polygon', coordinates: [[[-99, 28], [-98, 28], [-98, 29], [-99, 29], [-99, 28]]] };
+  var hole = { type: 'Polygon', coordinates: [[[-99, 28], [-98, 28], [-98, 29], [-99, 29], [-99, 28]], [[-98.7, 28.3], [-98.3, 28.3], [-98.3, 28.7], [-98.7, 28.7], [-98.7, 28.3]]] };
+  var multi = { type: 'MultiPolygon', coordinates: [
+    [[[-99, 28], [-98, 28], [-98, 29], [-99, 29], [-99, 28]]],
+    [[[-97, 27], [-96, 27], [-96, 28], [-97, 28], [-97, 27]]]
+  ] };
+  results.push(test_assert_('Point inside polygon', risk_pointInPolygon({ latitude: 28.5, longitude: -98.5 }, polygon)));
+  results.push(test_assert_('Point outside polygon', !risk_pointInPolygon({ latitude: 29.5, longitude: -98.5 }, polygon)));
+  results.push(test_assert_('Point on edge counts inside', risk_pointInPolygon({ latitude: 28.5, longitude: -99 }, polygon)));
+  results.push(test_assert_('Point on vertex counts inside', risk_pointInPolygon({ latitude: 28, longitude: -99 }, polygon)));
+  results.push(test_assert_('Point in polygon hole is outside', !risk_pointInPolygon({ latitude: 28.5, longitude: -98.5 }, hole)));
+  results.push(test_assert_('Point in multipolygon', risk_pointInMultiPolygon({ latitude: 27.5, longitude: -96.5 }, multi)));
+  results.push(test_assert_('Lat/lng reversal detection', !risk_pointInPolygon([28.5, -98.5], polygon)));
+  results.push(test_assert_('Invalid geometry returns false', !risk_pointInPolygon({ latitude: 28, longitude: -98 }, null)));
+  results.push(test_assert_('Empty feature distance returns null', risk_minDistanceToFeatures({ latitude: 28, longitude: -98 }, []) === null));
+  var esri = risk_esriGeometryToGeoJson({ rings: [[[-99, 28], [-98, 28], [-98, 29], [-99, 29]]] });
+  results.push(test_assert_('Esri polygon converts to GeoJSON polygon', esri.type === 'Polygon' && esri.coordinates[0][0][0] === -99));
+  return results;
+}
+
+function test_riskEngine_() {
+  var results = [];
+  var baseLocation = {
+    zip: '78026',
+    city: 'Jourdanton',
+    county: 'Atascosa County',
+    state: 'TX',
+    latitude: 28.5,
+    longitude: -98.5,
+    location_source: 'ZIP Centroid',
+    location_precision: 'Approximate',
+    resolved_at: cattle_nowIso_()
+  };
+  var infested = {
+    Zone_Record_ID: 'Z1',
+    Zone_Name: 'Fixture Infested',
+    Zone_Type: 'Infested Zone',
+    County_Names: 'Atascosa County',
+    Geometry_GeoJSON: JSON.stringify({ type: 'Polygon', coordinates: [[[-99, 28], [-98, 28], [-98, 29], [-99, 29], [-99, 28]]] })
+  };
+  var surveillance = {
+    Zone_Record_ID: 'Z2',
+    Zone_Name: 'Fixture Surveillance',
+    Zone_Type: 'Surveillance Zone',
+    County_Names: 'Atascosa County',
+    Geometry_GeoJSON: JSON.stringify({ type: 'Polygon', coordinates: [[[-99.5, 27.5], [-97.5, 27.5], [-97.5, 29.5], [-99.5, 29.5], [-99.5, 27.5]]] })
+  };
+  var healthCurrent = { state: 'Current', lastSuccess: cattle_nowIso_() };
+  var inside = risk_evaluateRanchNwsStatus(baseLocation, [infested], [], healthCurrent);
+  results.push(test_assert_('Inside infested is critical', inside.official_zone_status === 'Inside Mapped Infested Zone' && inside.operational_attention === 'Critical'));
+  var outsidePoint = Object.assign({}, baseLocation, { latitude: 29.4, longitude: -98.5 });
+  var partial = risk_evaluateRanchNwsStatus(outsidePoint, [infested], [], healthCurrent);
+  results.push(test_assert_('Partial-county outside polygon is uncertain heightened', partial.official_zone_status === 'Affected County — Exact Position Uncertain' && partial.operational_attention === 'Heightened'));
+  var countyOnly = Object.assign({}, infested, { Geometry_GeoJSON: '' });
+  var countyResult = risk_evaluateRanchNwsStatus(baseLocation, [countyOnly], [], healthCurrent);
+  results.push(test_assert_('Affected county missing geometry is critical uncertain', countyResult.official_zone_status === 'Affected County — Exact Position Uncertain' && countyResult.operational_attention === 'Critical'));
+  var surveillanceResult = risk_evaluateRanchNwsStatus(baseLocation, [surveillance], [], healthCurrent);
+  results.push(test_assert_('Inside surveillance is heightened', surveillanceResult.official_zone_status === 'Inside Mapped Surveillance Zone' && surveillanceResult.operational_attention === 'Heightened'));
+  var near = risk_evaluateRanchNwsStatus(Object.assign({}, baseLocation, { latitude: 27.5, longitude: -97.5 }), [], [{ Case_Record_ID: 'C1', Latitude: 27.6, Longitude: -97.6, County: 'Fixture County' }], healthCurrent);
+  results.push(test_assert_('Nearby detection raises attention', near.operational_attention === 'Heightened'));
+  var delayed = risk_evaluateRanchNwsStatus(Object.assign({}, baseLocation, { latitude: 27.5, longitude: -97.5 }), [], [], { state: 'Delayed', lastSuccess: cattle_daysAgoIso_(1) });
+  results.push(test_assert_('Delayed data raises attention', delayed.operational_attention === 'Heightened'));
+  var stale = risk_evaluateRanchNwsStatus(baseLocation, [], [], { state: 'Unavailable', lastSuccess: '' });
+  results.push(test_assert_('Unavailable data returns Data Unavailable', stale.operational_attention === 'Data Unavailable'));
+  var nonTexas = risk_evaluateRanchNwsStatus(Object.assign({}, baseLocation, { state: 'MA' }), [], [], healthCurrent);
+  results.push(test_assert_('Non-Texas location separates state logic', nonTexas.official_zone_status === 'Non-Texas Location'));
+  var noZip = risk_evaluateRanchNwsStatus({}, [], [], healthCurrent);
+  results.push(test_assert_('No ZIP unknown', noZip.official_zone_status === 'Unknown'));
+  var demo = risk_evaluateRanchNwsStatus(baseLocation, [], [], { state: 'Demo', lastSuccess: cattle_nowIso_() });
+  results.push(test_assert_('Demo mode labels data health', demo.official_data_health === 'Demo'));
+  return results;
+}
+
+function test_arcgisAdapter_() {
+  var results = [];
+  var mapping = arc_buildFieldMapping_({
+    fields: [
+      { name: 'ZONECATEGORY', alias: 'Zone Type' },
+      { name: 'CountyName', alias: 'County Name' },
+      { name: 'StartDate', alias: 'Effective Date' }
+    ]
+  }, {});
+  results.push(test_assert_('ArcGIS aliases map zone type', mapping.zone_type === 'ZONECATEGORY'));
+  results.push(test_assert_('ArcGIS aliases map county', mapping.county === 'CountyName'));
+  var featureSet = {
+    features: [{
+      attributes: { OBJECTID: 1, ZONECATEGORY: 'Infested', CountyName: 'Fixture County', StartDate: '2026-07-18' },
+      geometry: { rings: [[[-99, 28], [-98, 28], [-98, 29], [-99, 29], [-99, 28]]] }
+    }]
+  };
+  var geojson = arc_esriFeatureSetToGeoJson_(featureSet);
+  var normalized = arc_normalizeFeatures(geojson, mapping);
+  results.push(test_assert_('Esri JSON fallback converts features', geojson.type === 'FeatureCollection' && geojson.features.length === 1));
+  results.push(test_assert_('Normalized ArcGIS feature stores raw attributes', normalized[0].raw_attributes.CountyName === 'Fixture County'));
+  results.push(test_assert_('Field aliases changing still normalize zone', normalized[0].zone_type === 'Infested Zone'));
+  results.push(test_assert_('HTTP 403 fixture can be represented safely', test_httpErrorFixture_(403).code === 403));
+  results.push(test_assert_('Malformed JSON fixture is rejected by parser', cattle_parseJsonSafe_('{bad', null) === null));
+  results.push(test_assert_('Empty layer fixture normalizes empty list', arc_normalizeFeatures({ type: 'FeatureCollection', features: [] }, {}).length === 0));
+  var html = '<script>const url="https://services.arcgis.com/example/ArcGIS/rest/services/NWS/FeatureServer/0";</script>';
+  results.push(test_assert_('USDA endpoint discovery fixture finds FeatureServer layer', nws_extractStructuredEndpoints_(html).length === 1));
+  return results;
+}
+
+function test_gptValidation_() {
+  var results = [];
+  var allowed = ['SYSTEM:RISK', 'SYSTEM:DATA_HEALTH', 'H1'];
+  var valid = {
+    headline: 'Brief',
+    risk_summary: 'Data unavailable where missing.',
+    urgent_actions: [{ priority: 'High', action: 'Review open wound.', reason: 'Open wound record.', source_record_ids: ['H1'] }],
+    animals_to_review: [{ animal_id: 'A1', reason: 'Open wound.', source_record_ids: ['H1'] }],
+    inspection_plan: [{ scope: 'Whole Herd', due: '2026-07-19', reason: 'Cadence.' }],
+    financial_watchlist: [],
+    data_quality_issues: [],
+    questions_for_owner: [],
+    safety_note: CATTLEOS.SAFETY_NOTICE
+  };
+  results.push(test_assert_('Valid GPT output passes', brief_validateOutput(valid, allowed, []).valid));
+  var missing = Object.assign({}, valid);
+  delete missing.headline;
+  results.push(test_assert_('Missing field rejected', !brief_validateOutput(missing, allowed, []).valid));
+  var invalidPriority = JSON.parse(JSON.stringify(valid));
+  invalidPriority.urgent_actions[0].priority = 'Urgent';
+  results.push(test_assert_('Invalid priority rejected', !brief_validateOutput(invalidPriority, allowed, []).valid));
+  var invented = JSON.parse(JSON.stringify(valid));
+  invented.urgent_actions[0].source_record_ids = ['MADE_UP'];
+  results.push(test_assert_('Invented source ID rejected', !brief_validateOutput(invented, allowed, []).valid));
+  var treatment = JSON.parse(JSON.stringify(valid));
+  treatment.urgent_actions[0].action = 'Administer 10 ml medicine.';
+  results.push(test_assert_('Treatment or dosage rejected', !brief_validateOutput(treatment, allowed, []).valid));
+  var confirmedSuspect = JSON.parse(JSON.stringify(valid));
+  confirmedSuspect.urgent_actions[0].reason = 'Confirmed case from suspected record.';
+  results.push(test_assert_('Confirmation claim from suspected record rejected', !brief_validateOutput(confirmedSuspect, allowed, ['H1']).valid));
+  results.push(test_assert_('Malformed JSON rejected', !brief_validateOutput('{bad', allowed, []).valid));
+  var fallback = brief_generateDeterministicFallback({
+    location_summary: { official_zone_status: 'Unknown', operational_attention: 'Data Unavailable', official_data_health: 'Unavailable' },
+    open_wound_summary: { records: [], unresolved_count: 0 },
+    inspection_summary: { next_recommended_inspection: '2026-07-19' },
+    data_quality_issues: ['Fixture issue'],
+    allowed_source_record_ids: allowed,
+    suspected_source_record_ids: []
+  });
+  results.push(test_assert_('Deterministic fallback validates', brief_validateOutput(fallback, allowed, []).valid));
+  return results;
+}
+
+function test_geocoderFixture_(zip, city, county, state, lat, lng) {
+  var components = [
+    { long_name: zip, short_name: zip, types: ['postal_code'] },
+    { long_name: city, short_name: city, types: ['locality'] },
+    { long_name: state === 'TX' ? 'Texas' : state, short_name: state, types: ['administrative_area_level_1'] },
+    { long_name: 'United States', short_name: 'US', types: ['country'] }
+  ];
+  if (county) components.push({ long_name: county, short_name: county, types: ['administrative_area_level_2'] });
+  return {
+    results: [{
+      formatted_address: city + ', ' + state + ' ' + zip + ', USA',
+      address_components: components,
+      geometry: { location: { lat: lat, lng: lng } }
+    }]
+  };
+}
+
+function test_httpErrorFixture_(code) {
+  return { code: code, text: '', contentType: 'application/json' };
+}
+
+function test_assert_(name, condition, message) {
+  return test_result_(!!condition, name, message || (condition ? 'OK' : 'Assertion failed'));
+}
+
+function test_result_(pass, name, message) {
+  return { pass: pass, name: name, message: message || '', checkedAt: cattle_nowIso_() };
+}
+
+function test_logResults_(results) {
+  (results || []).forEach(function(result) {
+    audit_log(result.pass ? 'INFO' : 'ERROR', 'TEST_' + (result.pass ? 'PASS' : 'FAIL'), result.name, result);
+  });
+}

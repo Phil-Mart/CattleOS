@@ -1,0 +1,82 @@
+<!doctype html>
+<html>
+  <head>
+    <base target="_top">
+    <style>
+      body { font-family: Arial, sans-serif; margin: 0; color: #172033; }
+      main { padding: 18px; }
+      h1 { font-size: 20px; margin: 0 0 12px; }
+      label { display: block; font-size: 12px; font-weight: 700; margin-top: 12px; color: #334155; }
+      input { width: 100%; box-sizing: border-box; padding: 9px 10px; border: 1px solid #b6c3d3; border-radius: 6px; font-size: 14px; }
+      input:focus { outline: 2px solid #93c5fd; border-color: #2563eb; }
+      .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+      .notice { background: #eff6ff; border-left: 4px solid #2563eb; padding: 10px; margin: 12px 0; font-size: 13px; }
+      .error { color: #b91c1c; font-weight: 700; min-height: 20px; margin-top: 10px; }
+      button { border: 0; border-radius: 6px; background: #0f766e; color: white; padding: 10px 12px; font-weight: 700; cursor: pointer; margin-top: 16px; }
+      button.secondary { background: #475569; margin-left: 8px; }
+      button:disabled { background: #94a3b8; cursor: wait; }
+      .result { display: none; background: #f8fafc; border: 1px solid #dbe3ee; padding: 10px; margin-top: 12px; border-radius: 6px; font-size: 13px; }
+    </style>
+  </head>
+  <body>
+    <main>
+      <h1>CattleOS Setup</h1>
+      <div class="notice"><?= safetyNotice ?></div>
+      <form id="setupForm">
+        <label for="ranchName">Ranch name *</label>
+        <input id="ranchName" name="ranchName" required>
+        <label for="zip">Five-digit ZIP code *</label>
+        <input id="zip" name="zip" required inputmode="numeric" maxlength="5" pattern="\\d{5}" placeholder="78026">
+        <label for="acres">Acres *</label>
+        <input id="acres" name="acres" required inputmode="decimal">
+        <label for="ownerName">Owner name (optional)</label>
+        <input id="ownerName" name="ownerName">
+        <div class="grid">
+          <div>
+            <label for="latitude">Exact latitude (optional)</label>
+            <input id="latitude" name="latitude" inputmode="decimal">
+          </div>
+          <div>
+            <label for="longitude">Exact longitude (optional)</label>
+            <input id="longitude" name="longitude" inputmode="decimal">
+          </div>
+        </div>
+        <div id="error" class="error"></div>
+        <div id="result" class="result"></div>
+        <button id="submit" type="submit">Resolve and Save</button>
+        <button class="secondary" type="button" onclick="google.script.host.close()">Cancel</button>
+      </form>
+    </main>
+    <script>
+      const form = document.getElementById('setupForm');
+      const button = document.getElementById('submit');
+      const error = document.getElementById('error');
+      const result = document.getElementById('result');
+      form.addEventListener('submit', event => {
+        event.preventDefault();
+        error.textContent = '';
+        result.style.display = 'none';
+        const data = Object.fromEntries(new FormData(form).entries());
+        if (!/^\\d{5}$/.test(data.zip || '')) {
+          error.textContent = 'Enter exactly five digits for the ZIP code.';
+          return;
+        }
+        button.disabled = true;
+        button.textContent = 'Resolving...';
+        google.script.run
+          .withSuccessHandler(location => {
+            result.style.display = 'block';
+            result.textContent = `${location.city || 'Unknown city'}, ${location.county || 'Unknown county'}, ${location.state || 'Unknown state'} — ${location.location_source}.`;
+            button.textContent = 'Saved';
+            setTimeout(() => google.script.host.close(), 900);
+          })
+          .withFailureHandler(err => {
+            error.textContent = err && err.message ? err.message : String(err);
+            button.disabled = false;
+            button.textContent = 'Resolve and Save';
+          })
+          .setup_saveOnboarding(data);
+      });
+    </script>
+  </body>
+</html>

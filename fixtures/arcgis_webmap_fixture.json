@@ -1,0 +1,16 @@
+{
+  "operationalLayers": [
+    {
+      "id": "fixture-zones",
+      "title": "NWS Infested and Surveillance Zones",
+      "url": "https://services.arcgis.com/example/ArcGIS/rest/services/NWS_Zones/FeatureServer/0",
+      "layerType": "ArcGISFeatureLayer"
+    },
+    {
+      "id": "fixture-cases",
+      "title": "Confirmed Animal Cases",
+      "url": "https://services.arcgis.com/example/ArcGIS/rest/services/NWS_Cases/FeatureServer/0",
+      "layerType": "ArcGISFeatureLayer"
+    }
+  ]
+}

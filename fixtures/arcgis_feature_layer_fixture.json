@@ -1,0 +1,20 @@
+{
+  "fields": [
+    { "name": "ZONECATEGORY", "alias": "Zone Type" },
+    { "name": "CountyName", "alias": "County Name" },
+    { "name": "StartDate", "alias": "Effective Date" }
+  ],
+  "features": [
+    {
+      "attributes": {
+        "OBJECTID": 1,
+        "ZONECATEGORY": "Infested",
+        "CountyName": "Fixture County",
+        "StartDate": "2026-07-18"
+      },
+      "geometry": {
+        "rings": [[[-99, 28], [-98, 28], [-98, 29], [-99, 29], [-99, 28]]]
+      }
+    }
+  ]
+}
