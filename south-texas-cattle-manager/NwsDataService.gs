@@ -1,3 +1,24 @@
+var NWS_CENSUS_STATE_REFERENCES = [
+  ['AL', '01', 'Alabama'], ['AK', '02', 'Alaska'], ['AZ', '04', 'Arizona'],
+  ['AR', '05', 'Arkansas'], ['CA', '06', 'California'], ['CO', '08', 'Colorado'],
+  ['CT', '09', 'Connecticut'], ['DE', '10', 'Delaware'], ['DC', '11', 'District of Columbia'],
+  ['FL', '12', 'Florida'], ['GA', '13', 'Georgia'], ['HI', '15', 'Hawaii'],
+  ['ID', '16', 'Idaho'], ['IL', '17', 'Illinois'], ['IN', '18', 'Indiana'],
+  ['IA', '19', 'Iowa'], ['KS', '20', 'Kansas'], ['KY', '21', 'Kentucky'],
+  ['LA', '22', 'Louisiana'], ['ME', '23', 'Maine'], ['MD', '24', 'Maryland'],
+  ['MA', '25', 'Massachusetts'], ['MI', '26', 'Michigan'], ['MN', '27', 'Minnesota'],
+  ['MS', '28', 'Mississippi'], ['MO', '29', 'Missouri'], ['MT', '30', 'Montana'],
+  ['NE', '31', 'Nebraska'], ['NV', '32', 'Nevada'], ['NH', '33', 'New Hampshire'],
+  ['NJ', '34', 'New Jersey'], ['NM', '35', 'New Mexico'], ['NY', '36', 'New York'],
+  ['NC', '37', 'North Carolina'], ['ND', '38', 'North Dakota'], ['OH', '39', 'Ohio'],
+  ['OK', '40', 'Oklahoma'], ['OR', '41', 'Oregon'], ['PA', '42', 'Pennsylvania'],
+  ['RI', '44', 'Rhode Island'], ['SC', '45', 'South Carolina'], ['SD', '46', 'South Dakota'],
+  ['TN', '47', 'Tennessee'], ['TX', '48', 'Texas'], ['UT', '49', 'Utah'],
+  ['VT', '50', 'Vermont'], ['VA', '51', 'Virginia'], ['WA', '53', 'Washington'],
+  ['WV', '54', 'West Virginia'], ['WI', '55', 'Wisconsin'], ['WY', '56', 'Wyoming'],
+  ['PR', '72', 'Puerto Rico']
+];
+
 function nws_refreshOfficialData() {
   var health = cattle_withDocumentLock_('REFRESH_OFFICIAL_DATA', nws_refreshOfficialDataUnlocked_);
   try {
@@ -326,7 +347,7 @@ function nws_parseUsdaTableauCsv_(csvText) {
   return nws_usdaTableRowsToCases_(Utilities.parseCsv(String(csvText || '')));
 }
 
-function nws_usdaTableRowsToCases_(table, optionalCentroidResolver) {
+function nws_usdaTableRowsToCases_(table, optionalCountyPointResolver) {
   if (!Array.isArray(table) || table.length < 2) return [];
   var headerIndex = {};
   (table[0] || []).forEach(function(header, index) {
@@ -337,32 +358,46 @@ function nws_usdaTableRowsToCases_(table, optionalCentroidResolver) {
       throw new Error('USDA Tableau CSV is missing required column: ' + required);
     }
   });
-  var centroidResolver = optionalCentroidResolver || nws_geocodeCountyCentroid_;
-  var centroidCache = {};
+  var dataRows = table.slice(1);
+  function tableValue(values, header) {
+    var index = headerIndex[nws_usdaHeaderKey_(header)];
+    return index === undefined ? '' : cattle_normalizeText_(values[index]);
+  }
+  var censusPoints = optionalCountyPointResolver ? null : nws_loadCensusCountyPoints_(dataRows.map(function(values) {
+    return {
+      county: tableValue(values, 'County'),
+      state: tableValue(values, 'State')
+    };
+  }));
+  var countyPointResolver = optionalCountyPointResolver || function(county, state) {
+    return censusPoints[nws_countyLookupKey_(county, state)] || null;
+  };
+  var countyPointCache = {};
   var fetchedAt = cattle_nowIso_();
-  return table.slice(1).map(function(values) {
+  return dataRows.map(function(values) {
     function value(header) {
-      var index = headerIndex[nws_usdaHeaderKey_(header)];
-      return index === undefined ? '' : cattle_normalizeText_(values[index]);
+      return tableValue(values, header);
     }
     var officialId = value('Animal ID');
     var county = value('County');
     var state = value('State');
     var confirmedDate = value('Confirmed Date');
     if (!officialId && !county && !confirmedDate) return null;
-    var centroidKey = (county + '|' + state).toLowerCase();
-    if (!Object.prototype.hasOwnProperty.call(centroidCache, centroidKey)) {
-      centroidCache[centroidKey] = centroidResolver(county, state) || null;
+    var countyPointKey = nws_countyLookupKey_(county, state);
+    if (!Object.prototype.hasOwnProperty.call(countyPointCache, countyPointKey)) {
+      countyPointCache[countyPointKey] = countyPointResolver(county, state) || null;
     }
-    var centroid = centroidCache[centroidKey];
+    var countyPoint = countyPointCache[countyPointKey];
     var raw = {};
     (table[0] || []).forEach(function(header, index) {
       raw[String(header)] = values[index] === undefined ? '' : values[index];
     });
     raw.source_method = 'USDA public Tableau CSV export';
-    raw.coordinate_precision = centroid
-      ? 'Approximate county centroid; USDA does not publish premises coordinates in this export'
+    raw.coordinate_precision = countyPoint
+      ? 'Approximate county representative point from the ' + CATTLEOS.CENSUS_COUNTY_REFERENCE_YEAR +
+        ' U.S. Census Gazetteer; USDA does not publish premises coordinates in this export'
       : 'County only; coordinates unavailable';
+    raw.coordinate_source = countyPoint ? 'U.S. Census Gazetteer county internal point' : '';
     var caseType = [value('Case Type'), value('Animal Type')].join(' ');
     return {
       Case_Record_ID: 'USDA:' + cattle_hashString_([officialId, confirmedDate, county, state].join('|')),
@@ -375,8 +410,8 @@ function nws_usdaTableRowsToCases_(table, optionalCentroidResolver) {
       Species: value('Species'),
       Confirmation_Date: confirmedDate,
       Case_Status: value('Status'),
-      Latitude: centroid ? centroid.lat : '',
-      Longitude: centroid ? centroid.lng : '',
+      Latitude: countyPoint ? countyPoint.lat : '',
+      Longitude: countyPoint ? countyPoint.lng : '',
       Source_URL: CATTLEOS.USDA_CASES_URL,
       Source_Last_Modified: '',
       Fetched_At: fetchedAt,
@@ -392,32 +427,186 @@ function nws_usdaHeaderKey_(value) {
   return cattle_normalizeText_(value).toLowerCase().replace(/[^a-z0-9]+/g, '');
 }
 
-function nws_geocodeCountyCentroid_(county, state) {
-  var normalizedCounty = cattle_normalizeText_(county);
-  var normalizedState = cattle_normalizeText_(state);
-  if (!normalizedCounty || !normalizedState) return null;
-  var query = normalizedCounty + (/county$/i.test(normalizedCounty) ? '' : ' County') +
-    ', ' + normalizedState + ', USA';
-  var cache = CacheService.getScriptCache();
-  var cacheKey = 'usda-county-centroid:' + cattle_hashString_(query.toLowerCase());
-  try {
-    var cached = cache.get(cacheKey);
-    if (cached) return cattle_parseJsonSafe_(cached, null);
-  } catch (cacheReadErr) {
-    Logger.log('USDA county-centroid cache read skipped: ' + cacheReadErr.message);
+function nws_loadCensusCountyPoints_(countyStatePairs, optionalDependencies) {
+  var dependencies = optionalDependencies || {};
+  var cache = dependencies.cache || null;
+  if (!cache) {
+    try {
+      cache = CacheService.getScriptCache();
+    } catch (cacheErr) {
+      Logger.log('Census county-reference cache unavailable: ' + cacheErr.message);
+    }
   }
-  var response = Maps.newGeocoder().setRegion('US').geocode(query);
-  var first = response && response.results && response.results.length ? response.results[0] : null;
-  var geometry = first && first.geometry ? first.geometry.location : null;
-  var point = risk_normalizePoint_(geometry ? { latitude: geometry.lat, longitude: geometry.lng } : null);
-  if (!point.valid) return null;
-  var result = { lat: point.lat, lng: point.lng };
+  var stateReferences = {};
+  (countyStatePairs || []).forEach(function(pair) {
+    var reference = nws_stateReference_(pair && pair.state);
+    if (reference) stateReferences[reference.usps] = reference;
+  });
+  var lookup = {};
+  var missingReferences = [];
+  Object.keys(stateReferences).sort().forEach(function(usps) {
+    var reference = stateReferences[usps];
+    var cacheKey = 'census-county-points:' + CATTLEOS.CENSUS_COUNTY_REFERENCE_YEAR + ':' + usps;
+    var cached = '';
+    if (cache) {
+      try {
+        cached = cache.get(cacheKey) || '';
+      } catch (cacheReadErr) {
+        Logger.log('Census county-reference cache read skipped: ' + cacheReadErr.message);
+      }
+    }
+    var cachedPoints = cached ? cattle_parseJsonSafe_(cached, null) : null;
+    if (cachedPoints && typeof cachedPoints === 'object') {
+      Object.keys(cachedPoints).forEach(function(key) {
+        lookup[key] = cachedPoints[key];
+      });
+    } else {
+      missingReferences.push(reference);
+    }
+  });
+  if (!missingReferences.length) return lookup;
+  var requests = missingReferences.map(function(reference) {
+    return {
+      url: nws_censusCountyReferenceUrl_(reference),
+      method: 'get',
+      muteHttpExceptions: true,
+      followRedirects: true,
+      validateHttpsCertificates: true,
+      timeoutSeconds: CATTLEOS.EXTERNAL_FETCH_TIMEOUT_SECONDS
+    };
+  });
+  var fetchAll = dependencies.fetchAll || function(items) {
+    return UrlFetchApp.fetchAll(items);
+  };
+  var responses;
   try {
-    cache.put(cacheKey, JSON.stringify(result), 21600);
-  } catch (cacheWriteErr) {
-    Logger.log('USDA county-centroid cache write skipped: ' + cacheWriteErr.message);
+    responses = fetchAll(requests);
+  } catch (fetchErr) {
+    Logger.log('Census county-reference batch fetch failed: ' + fetchErr.message);
+    return lookup;
   }
-  return result;
+  (responses || []).forEach(function(response, index) {
+    var reference = missingReferences[index];
+    if (!reference || !response) return;
+    var code = response.getResponseCode();
+    if (code < 200 || code >= 300) {
+      Logger.log('Census county-reference request returned HTTP ' + code + ' for ' + reference.usps);
+      return;
+    }
+    var statePoints;
+    try {
+      statePoints = nws_parseCensusCountyGazetteer_(response.getContentText());
+    } catch (parseErr) {
+      Logger.log('Census county-reference parse failed for ' + reference.usps + ': ' + parseErr.message);
+      return;
+    }
+    Object.keys(statePoints).forEach(function(key) {
+      lookup[key] = statePoints[key];
+    });
+    if (cache) {
+      var cacheText = cattle_json_(statePoints);
+      if (cacheText && cacheText.length <= CATTLEOS.MAX_SCRIPT_CACHE_CHARS) {
+        try {
+          cache.put(
+            'census-county-points:' + CATTLEOS.CENSUS_COUNTY_REFERENCE_YEAR + ':' + reference.usps,
+            cacheText,
+            21600
+          );
+        } catch (cacheWriteErr) {
+          Logger.log('Census county-reference cache write skipped: ' + cacheWriteErr.message);
+        }
+      }
+    }
+  });
+  return lookup;
+}
+
+function nws_parseCensusCountyGazetteer_(text) {
+  var lines = String(text || '').replace(/\r/g, '').split('\n').filter(function(line) {
+    return !!cattle_normalizeText_(line);
+  });
+  if (lines.length < 2) throw new Error('County reference file was empty.');
+  var headers = lines[0].split('|').map(function(header) {
+    return cattle_normalizeText_(header);
+  });
+  var headerIndex = {};
+  headers.forEach(function(header, index) {
+    headerIndex[header] = index;
+  });
+  ['USPS', 'NAME', 'INTPTLAT', 'INTPTLONG'].forEach(function(required) {
+    if (!Object.prototype.hasOwnProperty.call(headerIndex, required)) {
+      throw new Error('County reference file is missing required column: ' + required);
+    }
+  });
+  var points = {};
+  lines.slice(1).forEach(function(line) {
+    var values = line.split('|');
+    var state = values[headerIndex.USPS];
+    var county = values[headerIndex.NAME];
+    var point = risk_normalizePoint_({
+      latitude: values[headerIndex.INTPTLAT],
+      longitude: values[headerIndex.INTPTLONG]
+    });
+    if (!point.valid) return;
+    points[nws_countyLookupKey_(county, state)] = { lat: point.lat, lng: point.lng };
+  });
+  return points;
+}
+
+function nws_stateReference_(value) {
+  var key = nws_geoNameKey_(value);
+  if (!key) return null;
+  for (var i = 0; i < NWS_CENSUS_STATE_REFERENCES.length; i++) {
+    var row = NWS_CENSUS_STATE_REFERENCES[i];
+    if (key === row[0].toLowerCase() || key === nws_geoNameKey_(row[2])) {
+      return { usps: row[0], fips: row[1], name: row[2] };
+    }
+  }
+  return null;
+}
+
+function nws_countyLookupKey_(county, state) {
+  var stateReference = nws_stateReference_(state);
+  var stateKey = stateReference ? stateReference.usps.toLowerCase() : nws_geoNameKey_(state);
+  var countyKey = nws_geoNameKey_(county)
+    .replace(/\b(city and borough|census area|county|parish|borough|municipality|city)\b$/, '')
+    .trim();
+  return stateKey + '|' + countyKey;
+}
+
+function nws_geoNameKey_(value) {
+  var text = cattle_normalizeText_(value);
+  try {
+    text = text.normalize('NFD');
+  } catch (normalizationErr) {
+    Logger.log('Geographic-name Unicode normalization unavailable.');
+  }
+  return text.toLowerCase()
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/&/g, ' and ')
+    .replace(/[^a-z0-9]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function nws_censusCountyReferenceUrl_(stateReference) {
+  var fips = stateReference && String(stateReference.fips || '');
+  if (!/^\d{2}$/.test(fips)) throw new Error('Invalid Census state FIPS code.');
+  var url = CATTLEOS.CENSUS_COUNTY_REFERENCE_BASE_URL +
+    CATTLEOS.CENSUS_COUNTY_REFERENCE_YEAR + '_gaz_counties_' + fips + '.txt';
+  nws_assertCensusCountyReferenceUrl_(url);
+  return url;
+}
+
+function nws_assertCensusCountyReferenceUrl_(url) {
+  var pattern = new RegExp(
+    '^https://www2\\.census\\.gov/geo/docs/maps-data/data/gazetteer/' +
+    CATTLEOS.CENSUS_COUNTY_REFERENCE_YEAR + '_Gazetteer/' +
+    CATTLEOS.CENSUS_COUNTY_REFERENCE_YEAR + '_gaz_counties_\\d{2}\\.txt$'
+  );
+  if (!pattern.test(String(url || ''))) {
+    throw new Error('County-reference adapter refused a non-approved or non-HTTPS URL.');
+  }
 }
 
 function nws_normalizeUsdaCases(rawCases) {
@@ -621,14 +810,34 @@ function nws_refreshUsda_() {
   var result = nws_fetchUsdaCases();
   if (result.ok && result.cases.length) {
     var count = nws_storeUsdaCases(result.cases);
-    nws_setDataStatus_('usda-confirmed-cases', 'USDA APHIS confirmed detections', CATTLEOS.USDA_CASES_URL, 'OK', {
-      lastSuccess: cattle_nowIso_(),
-      recordsReceived: count,
-      usingLastKnownGood: false,
-      dataMode: 'Live',
-      schemaFingerprint: cattle_hashString_(JSON.stringify(result.cases.slice(0, 3).map(function(row) { return Object.keys(row); })))
-    });
-    return { ok: true, cases: count, method: result.method };
+    var mappedCount = result.cases.filter(function(row) {
+      return risk_normalizePoint_({ latitude: row.Latitude, longitude: row.Longitude }).valid;
+    }).length;
+    var missingPointCount = Math.max(0, result.cases.length - mappedCount);
+    nws_setDataStatus_(
+      'usda-confirmed-cases',
+      'USDA APHIS confirmed detections',
+      CATTLEOS.USDA_CASES_URL,
+      missingPointCount ? 'Degraded' : 'OK',
+      {
+        lastSuccess: cattle_nowIso_(),
+        recordsReceived: count,
+        errorCode: missingPointCount ? 'USDA_COUNTY_POINTS_PARTIAL' : '',
+        errorMessage: missingPointCount
+          ? missingPointCount + ' case record(s) loaded without a matching Census county representative point.'
+          : '',
+        usingLastKnownGood: false,
+        dataMode: 'Live',
+        schemaFingerprint: cattle_hashString_(JSON.stringify(result.cases.slice(0, 3).map(function(row) { return Object.keys(row); })))
+      }
+    );
+    return {
+      ok: true,
+      cases: count,
+      mappedCountyPoints: mappedCount,
+      missingCountyPoints: missingPointCount,
+      method: result.method
+    };
   }
   var hasLastKnownGood = nws_getStoredCases_().some(function(row) {
     return row.Source === 'USDA APHIS';
@@ -872,7 +1081,8 @@ function nws_fetchUrl_(url) {
   var response = UrlFetchApp.fetch(url, {
     muteHttpExceptions: true,
     followRedirects: true,
-    validateHttpsCertificates: true
+    validateHttpsCertificates: true,
+    timeoutSeconds: CATTLEOS.EXTERNAL_FETCH_TIMEOUT_SECONDS
   });
   var headers = response.getAllHeaders ? response.getAllHeaders() : {};
   var payload = {

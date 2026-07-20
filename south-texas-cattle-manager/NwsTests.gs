@@ -276,21 +276,63 @@ function test_arcgisAdapter_() {
   results.push(test_assert_('Approved USDA Tableau CSV URL passes host validation', !test_throws_(function() {
     nws_assertOfficialUrl_(tableauUrl);
   })));
-  var centroidCalls = 0;
+  var countyPointCalls = 0;
   var usdaCases = nws_usdaTableRowsToCases_([
     ['Animal ID', 'Animal Type', 'Case Type', 'Confirmed Date', 'County', 'Species', 'State', 'Status'],
     ['TX-1', 'Domestic', 'Domestic', '7/18/2026', 'Starr', 'Cattle', 'Texas', 'Active'],
     ['TX-2', 'Fly Trap', 'Fly Trap', '7/19/2026', 'Starr', '', 'Texas', 'Active']
   ], function() {
-    centroidCalls++;
+    countyPointCalls++;
     return { lat: 26.56, lng: -98.74 };
   });
   results.push(test_assert_('USDA Tableau rows normalize into official case records', usdaCases.length === 2 && usdaCases[0].Official_Case_ID === 'TX-1'));
-  results.push(test_assert_('USDA county centroid is resolved once per county', centroidCalls === 1));
+  results.push(test_assert_('USDA county point is resolved once per county', countyPointCalls === 1));
   results.push(test_assert_('USDA fly-trap rows remain distinct from animal cases', usdaCases[1].Detection_Type === 'Confirmed Wild-Fly Detection'));
-  results.push(test_assert_('USDA case records retain county-centroid precision metadata', cattle_parseJsonSafe_(
+  results.push(test_assert_('USDA case records retain county-point precision metadata', cattle_parseJsonSafe_(
     usdaCases[0].Raw_Attributes_JSON, {}
-  ).coordinate_precision.indexOf('Approximate county centroid') === 0));
+  ).coordinate_precision.indexOf('Approximate county representative point') === 0));
+  results.push(test_assert_(
+    'Census state references accept full names and abbreviations',
+    nws_stateReference_('Texas').fips === '48' && nws_stateReference_('TX').fips === '48'
+  ));
+  var censusCountyFixture = [
+    'USPS|GEOID|GEOIDFQ|ANSICODE|NAME|ALAND|AWATER|ALAND_SQMI|AWATER_SQMI|INTPTLAT|INTPTLONG',
+    'TX|48013|0500000US48013|01383792|Atascosa County|1|0|1|0|28.891478|-98.535381',
+    'TX|48163|0500000US48163|01383867|Frio County|1|0|1|0|28.869383|-99.109005',
+    'NM|35013|0500000US35013|00933054|Do\u00f1a Ana County|1|0|1|0|32.350912|-106.832182'
+  ].join('\n');
+  var censusCountyPoints = nws_parseCensusCountyGazetteer_(censusCountyFixture);
+  results.push(test_assert_(
+    'Census Gazetteer parser matches county suffixes and accents',
+    censusCountyPoints[nws_countyLookupKey_('Atascosa', 'Texas')].lat === 28.891478 &&
+      censusCountyPoints[nws_countyLookupKey_('Dona Ana', 'New Mexico')].lng === -106.832182
+  ));
+  var censusFetchRequestCount = 0;
+  var censusCacheWriteCount = 0;
+  var batchedCountyPoints = nws_loadCensusCountyPoints_([
+    { county: 'Atascosa', state: 'Texas' },
+    { county: 'Frio', state: 'TX' }
+  ], {
+    cache: {
+      get: function() { return ''; },
+      put: function() { censusCacheWriteCount++; }
+    },
+    fetchAll: function(requests) {
+      censusFetchRequestCount = requests.length;
+      return requests.map(function() {
+        return {
+          getResponseCode: function() { return 200; },
+          getContentText: function() { return censusCountyFixture; }
+        };
+      });
+    }
+  });
+  results.push(test_assert_(
+    'Census county references batch one request per state',
+    censusFetchRequestCount === 1 &&
+      censusCacheWriteCount === 1 &&
+      !!batchedCountyPoints[nws_countyLookupKey_('Frio', 'Texas')]
+  ));
   results.push(test_assert_('Combined zone layer title is not used as an ambiguous fallback', nws_inferZoneTypeFromLayerTitle_('Infested and Surveillance Zones') === 'Unknown'));
   results.push(test_assert_('Expected USDA dashboard fallback does not stale Texas zone data', nws_isExpectedUsdaLinkFallback_({
     Source_Key: 'usda-confirmed-cases',

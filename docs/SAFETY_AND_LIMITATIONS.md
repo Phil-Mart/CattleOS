@@ -34,7 +34,7 @@ CattleOS displays the official TAHC page link instead of hardcoding a phone numb
 - Incomplete ArcGIS transfers, ambiguous zone types, and snapshots without an active interpretable zone record are treated as unavailable rather than being assigned a lower-risk status.
 - Workbook zone geometry may be generalized by up to `0.00015` degrees (about 17 meters) before lossless compression for Google Sheets storage. Boundary-adjacent properties require verification on the official TAHC map.
 - USDA dashboard internals may change. CattleOS validates the discovered Tableau CSV export and falls back to the official dashboard link if no approved structured endpoint remains available.
-- USDA confirmed detections are published by county. Their map markers and distances use approximate county centroids, not affected-premises coordinates.
+- USDA confirmed detections are published by county. Their map markers and distances use representative Census county points, not affected-premises coordinates.
 - Apps Script cannot guarantee that official map iframes are embeddable; the local map dialog and official new-tab links remain available.
 - ZIP centroids are approximate. Exact coordinates can be supplied for local calculations, but exact regulatory determinations still require official verification.
 - Exact coordinates do not bypass the requirement for a valid five-digit ranch ZIP.

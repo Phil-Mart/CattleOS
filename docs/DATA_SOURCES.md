@@ -23,14 +23,16 @@ USDA APHIS is treated as authoritative for confirmed animal and wild-fly detecti
 
 The USDA adapter discovers the official public Tableau view embedded in the APHIS page and downloads its CSV export. It validates the exact USDA dashboard host and expected view path before fetching, then imports case ID, county, state, species, confirmation date, and active/inactive status. If USDA changes or removes that structured export, CattleOS falls back to an approved ArcGIS endpoint when available or otherwise shows the official dashboard link and marks the adapter degraded.
 
-USDA publishes these detections by county rather than premises coordinates. CattleOS geocodes each unique county once and plots an explicitly labeled approximate county centroid. Distances involving these records are management approximations, not premises distances or regulatory boundaries.
+USDA publishes these detections by county rather than premises coordinates. CattleOS fetches the official 2025 U.S. Census Gazetteer county file for each represented state in one parallel batch, caches the small lookup, and plots the Census internal point as an explicitly labeled representative county point. Distances involving these records are management approximations, not premises distances or regulatory boundaries.
+
+County reference files: <https://www2.census.gov/geo/docs/maps-data/data/gazetteer/2025_Gazetteer/>
 
 ## Google Apps Script
 
 Approved Apps Script services:
 
 - `Maps.newGeocoder()` for ZIP geocoding.
-- `UrlFetchApp` for official-source and OpenAI HTTPS requests.
+- `UrlFetchApp` and `fetchAll()` for bounded official-source, Census reference, and OpenAI HTTPS requests.
 - `HtmlService` for onboarding, map, and API-key dialogs.
 - `PropertiesService` for configuration and API key storage.
 - `CacheService` for short-lived request caching.

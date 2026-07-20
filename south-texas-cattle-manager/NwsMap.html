@@ -55,7 +55,7 @@
           <div><span style="background:#7c3aed"></span>Confirmed animal case</div>
           <div><span style="background:#0369a1"></span>Confirmed wild-fly detection</div>
           <div><span style="background:#94a3b8"></span>Data unavailable</div>
-          <div class="legend-note">USDA locations are approximate county centroids because premises coordinates are not published in the dashboard export.</div>
+          <div class="legend-note">USDA locations use representative Census county points because premises coordinates are not published in the dashboard export.</div>
         </div>
       </aside>
     </div>
@@ -77,7 +77,7 @@
       document.getElementById('attention').textContent = result.operational_attention || 'Data Unavailable';
       document.getElementById('location').textContent = [result.city, result.county, result.state, result.zip].filter(Boolean).join(', ') || 'Not configured';
       document.getElementById('nearest').textContent = Number.isFinite(result.nearest_detection_miles)
-        ? `${result.nearest_detection_miles.toFixed(1)} miles${result.nearest_detection_precision ? ' (approx. county centroid)' : ''}`
+        ? `${result.nearest_detection_miles.toFixed(1)} miles${result.nearest_detection_precision ? ' (approx. county point)' : ''}`
         : 'Data unavailable';
       document.getElementById('health').textContent = result.official_data_health || 'Not Initialized';
       document.getElementById('tahc').href = data.tahcUrl;

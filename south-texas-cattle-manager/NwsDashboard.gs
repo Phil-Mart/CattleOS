@@ -157,7 +157,7 @@ function nws_renderWatch_(result, workflow) {
     result.operational_attention || 'Data Unavailable',
     result.county || '',
     cattle_formatDistance_(result.nearest_detection_miles) +
-      (result.nearest_detection_precision ? ' (approx. county centroid)' : ''),
+      (result.nearest_detection_precision ? ' (approx. county point)' : ''),
     result.official_data_health || health.state,
     workflow ? workflow.lastInspectionSummary : nws_getLastInspectionSummary_(),
     workflow ? workflow.animalsWithOpenWounds.length : nws_findAnimalsWithOpenWounds_().length,

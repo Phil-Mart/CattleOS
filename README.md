@@ -65,7 +65,7 @@ The TAHC adapter discovers the ArcGIS app and operational layers, preserves each
 
 If public layers require authentication, a zone layer is incomplete, or schemas change, CattleOS switches to degraded/delayed/unavailable states, preserves last-known-good data when present, and links the official TAHC map.
 
-The USDA adapter discovers and validates the official Tableau CSV export embedded in the APHIS dashboard page. It imports case records by county and plots explicitly labeled approximate county centroids because the export does not publish premises coordinates. If that export becomes unavailable, CattleOS tries approved structured endpoints and otherwise uses the official USDA dashboard link instead of scraping rendered dashboard text.
+The USDA adapter discovers and validates the official Tableau CSV export embedded in the APHIS dashboard page. It imports case records by county, then fetches the small official Census Gazetteer files for the represented states in one parallel batch and plots explicitly labeled representative county points because the export does not publish premises coordinates. If that export becomes unavailable, CattleOS tries approved structured endpoints and otherwise uses the official USDA dashboard link instead of scraping rendered dashboard text.
 
 ## Ranch Brief
 
@@ -99,7 +99,7 @@ Apps Script tests:
 Cattle Manager → Demo & Testing → Run All Tests
 ```
 
-The local runner validates syntax for all `.gs` files, compiles all HTML client scripts, and runs 115 pure tests, 7 HTML checks, and 3 checked-in fixture checks. Apps Script integration tests additionally verify workbook setup, named range creation, migration idempotence, and sheet structure.
+The local runner validates syntax for all `.gs` files, compiles all HTML client scripts, and runs 118 pure tests, 7 HTML checks, and 3 checked-in fixture checks. Apps Script integration tests additionally verify workbook setup, named range creation, migration idempotence, and sheet structure.
 
 ## Safety Boundary
 

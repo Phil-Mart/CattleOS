@@ -186,7 +186,7 @@ function risk_evaluateRanchNwsStatus(location, zones, cases, dataHealth) {
   result.nearest_detection_county = nearest ? nearest.county : '';
   result.nearest_detection_precision = nearest ? nearest.precision : '';
   if (nearest && nearest.precision) {
-    result.caveats.push('USDA detection distance uses an approximate county centroid, not the affected premises');
+    result.caveats.push('USDA detection distance uses a representative Census county point, not the affected premises');
   }
   var threshold = settings_getNumber ? settings_getNumber('NWS_Proximity_Warning_Miles', 50) : 50;
   var nearDetection = nearest && nearest.miles <= threshold;
@@ -220,7 +220,7 @@ function risk_evaluateRanchNwsStatus(location, zones, cases, dataHealth) {
   if (nearDetection && result.operational_attention === 'Routine') {
     result.operational_attention = 'Heightened';
     result.explanation = 'A confirmed detection' +
-      (nearest.precision ? ' represented by an approximate county centroid' : '') +
+      (nearest.precision ? ' represented by an approximate county point' : '') +
       ' is within the configured operational proximity threshold. This threshold is not an official regulatory boundary.';
   }
   if (health.state === 'Delayed' && result.operational_attention === 'Routine') {

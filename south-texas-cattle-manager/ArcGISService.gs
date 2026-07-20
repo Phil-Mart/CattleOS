@@ -211,7 +211,8 @@ function arc_fetch_(url, options) {
   var response = UrlFetchApp.fetch(url, {
     muteHttpExceptions: true,
     followRedirects: true,
-    validateHttpsCertificates: true
+    validateHttpsCertificates: true,
+    timeoutSeconds: CATTLEOS.EXTERNAL_FETCH_TIMEOUT_SECONDS
   });
   var code = response.getResponseCode();
   var headers = response.getAllHeaders ? response.getAllHeaders() : {};
