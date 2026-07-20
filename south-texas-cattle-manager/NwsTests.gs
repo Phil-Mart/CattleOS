@@ -391,6 +391,16 @@ function test_coreSafety_() {
   results.push(test_assert_('Dashboard uses the installed Ranch Brief summary helper', nws_getLatestBriefSummarySafe_(function() {
     return 'Latest fixture brief';
   }) === 'Latest fixture brief'));
+  results.push(test_assert_('Ranch Brief records an available actor email', brief_getActorEmail_({
+    getActiveUser: function() {
+      return { getEmail: function() { return 'owner@example.com'; } };
+    }
+  }) === 'owner@example.com'));
+  results.push(test_assert_('Ranch Brief tolerates unavailable actor-email permission', brief_getActorEmail_({
+    getActiveUser: function() {
+      throw new Error('userinfo.email permission unavailable');
+    }
+  }) === ''));
   results.push(test_assert_('Unchanged snapshots ignore fetch timestamp only', nws_rowsEquivalent_(
     ['Zone_Record_ID', 'Fetched_At', 'Data_Mode'],
     [{ Zone_Record_ID: 'Z1', Fetched_At: 'one', Data_Mode: 'Live' }],

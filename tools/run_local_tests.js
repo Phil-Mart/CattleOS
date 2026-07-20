@@ -93,6 +93,16 @@ if (!onboarding.includes('/^\\d{5}$/.test')) {
 }
 htmlChecks++;
 
+const nwsMap = fs.readFileSync(path.join(root, 'NwsMap.html'), 'utf8');
+if (!nwsMap.includes('leaflet@1.9.4') || !nwsMap.includes("L.map('map'")) {
+  throw new Error('NWS map must load the pinned Leaflet library and initialize an interactive map.');
+}
+htmlChecks++;
+if (!nwsMap.includes('https://tile.openstreetmap.org/{z}/{x}/{y}.png') || !nwsMap.includes('L.geoJSON')) {
+  throw new Error('NWS map must render an OpenStreetMap basemap and GeoJSON zone overlays.');
+}
+htmlChecks++;
+
 const fixtureRoot = path.resolve(__dirname, '..', 'fixtures');
 let fixtureChecks = 0;
 const layerFixture = JSON.parse(fs.readFileSync(path.join(fixtureRoot, 'arcgis_feature_layer_fixture.json'), 'utf8'));

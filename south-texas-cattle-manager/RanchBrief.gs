@@ -523,7 +523,7 @@ function brief_logAndRender_(input, output, mode, errorMessage, validation) {
   cattle_appendObject_('Ranch_Brief_Log', {
     Brief_ID: cattle_uuid_('BRIEF'),
     Generated_At: cattle_nowIso_(),
-    Generated_By: Session.getActiveUser ? Session.getActiveUser().getEmail() : '',
+    Generated_By: brief_getActorEmail_(),
     Model: mode === 'GPT-5.6 Live' ? settings_get('OpenAI_Model', 'gpt-5.6-sol') : '',
     Mode: mode,
     Input_Record_Count: input.allowed_source_record_ids.length,
@@ -538,6 +538,19 @@ function brief_logAndRender_(input, output, mode, errorMessage, validation) {
   audit_log('INFO', 'GENERATE_RANCH_BRIEF', 'Ranch Brief generated.', { mode: mode, validation: validation.valid ? 'Valid' : validation.errors });
   cattle_showToast_('Ranch Brief generated: ' + mode);
   return output;
+}
+
+function brief_getActorEmail_(optionalSession) {
+  var sessionService = arguments.length
+    ? optionalSession
+    : (typeof Session !== 'undefined' ? Session : null);
+  try {
+    if (!sessionService || typeof sessionService.getActiveUser !== 'function') return '';
+    var user = sessionService.getActiveUser();
+    return user && typeof user.getEmail === 'function' ? user.getEmail() : '';
+  } catch (err) {
+    return '';
+  }
 }
 
 function brief_renderText_(output, mode) {

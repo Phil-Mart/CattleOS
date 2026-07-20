@@ -2,6 +2,12 @@
 <html>
   <head>
     <base target="_top">
+    <link
+      rel="stylesheet"
+      href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
+      integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY="
+      crossorigin=""
+    >
     <style>
       body { margin: 0; font-family: Arial, sans-serif; color: #172033; background: #f8fafc; }
       header { padding: 14px 16px; background: #164e63; color: white; }
@@ -9,7 +15,8 @@
       .meta { font-size: 12px; opacity: .9; margin-top: 4px; }
       .notice { padding: 10px 16px; background: #fef2f2; color: #7f1d1d; font-size: 13px; line-height: 1.35; }
       .wrap { display: grid; grid-template-columns: 1fr 240px; gap: 12px; padding: 12px; }
-      svg { width: 100%; height: 420px; background: #e0f2fe; border: 1px solid #cbd5e1; border-radius: 6px; }
+      #map { width: 100%; height: 420px; background: #e0f2fe; border: 1px solid #cbd5e1; border-radius: 6px; }
+      .map-message { display: none; align-items: center; justify-content: center; box-sizing: border-box; height: 100%; padding: 24px; color: #334155; text-align: center; }
       aside { background: white; border: 1px solid #cbd5e1; border-radius: 6px; padding: 12px; font-size: 13px; }
       .row { margin-bottom: 9px; }
       .label { color: #475569; font-size: 11px; text-transform: uppercase; letter-spacing: .04em; }
@@ -18,7 +25,8 @@
       .legend { display: grid; gap: 6px; margin-top: 8px; }
       .legend span { display: inline-block; width: 12px; height: 12px; border-radius: 50%; margin-right: 6px; vertical-align: -1px; }
       .poly { border-radius: 2px !important; }
-      @media (max-width: 700px) { .wrap { grid-template-columns: 1fr; } svg { height: 340px; } }
+      .leaflet-control-attribution { font-size: 10px; }
+      @media (max-width: 700px) { .wrap { grid-template-columns: 1fr; } #map { height: 340px; } }
     </style>
   </head>
   <body>
@@ -28,7 +36,9 @@
     </header>
     <div class="notice" id="notice"></div>
     <div class="wrap">
-      <svg id="map" viewBox="0 0 800 420" role="img" aria-label="Local NWS map"></svg>
+      <div id="map" role="region" aria-label="Interactive local NWS map">
+        <div class="map-message" id="map-message"></div>
+      </div>
       <aside>
         <div class="row"><div class="label">Official zone status</div><div class="value" id="zone"></div></div>
         <div class="row"><div class="label">Operational attention</div><div class="value" id="attention"></div></div>
@@ -47,6 +57,11 @@
         </div>
       </aside>
     </div>
+    <script
+      src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
+      integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo="
+      crossorigin=""
+    ></script>
     <script>
       const data = <?!= mapJson ?>;
       const result = data.result || {};
@@ -64,93 +79,90 @@
       document.getElementById('tahc').href = data.tahcUrl;
       document.getElementById('usda').href = data.usdaUrl;
 
-      const svg = document.getElementById('map');
-      const points = [];
-      if (Number.isFinite(result.latitude) && Number.isFinite(result.longitude)) points.push([result.longitude, result.latitude]);
-      (data.cases || []).forEach(c => points.push([c.longitude, c.latitude]));
-      (data.zones || []).forEach(z => flatten(z.geometry && z.geometry.coordinates).forEach(p => points.push(p)));
-      const bbox = bounds(points);
-      drawBase();
-      (data.zones || []).forEach(drawZone);
-      (data.cases || []).forEach(drawCase);
-      drawRanch();
+      if (typeof L === 'undefined') {
+        showMapMessage('The interactive basemap could not load. Use the official TAHC map link to verify the location.');
+      } else {
+        drawMap();
+      }
 
-      function bounds(list) {
-        const valid = list.filter(p =>
-          Array.isArray(p) &&
-          Number.isFinite(Number(p[0])) &&
-          Number.isFinite(Number(p[1]))
+      function drawMap() {
+        const map = L.map('map', { zoomControl: true });
+        const hasRanchLocation = validCoordinate(result.latitude, result.longitude);
+        map.setView(
+          hasRanchLocation
+            ? [Number(result.latitude), Number(result.longitude)]
+            : [31, -99],
+          hasRanchLocation ? 9 : 6
         );
-        if (!valid.length) return { minX: -100, maxX: -96, minY: 26, maxY: 30 };
-        if (Number.isFinite(result.latitude) && Number.isFinite(result.longitude)) {
-          const local = valid.filter(p =>
-            Math.abs(Number(p[0]) - result.longitude) <= 3 &&
-            Math.abs(Number(p[1]) - result.latitude) <= 3
-          );
-          const halfX = Math.max(.8, ...local.map(p => Math.abs(Number(p[0]) - result.longitude) * 1.15));
-          const halfY = Math.max(.5, ...local.map(p => Math.abs(Number(p[1]) - result.latitude) * 1.15));
-          return {
-            minX: result.longitude - halfX,
-            maxX: result.longitude + halfX,
-            minY: result.latitude - halfY,
-            maxY: result.latitude + halfY
-          };
-        }
-        let xs = valid.map(p => Number(p[0]));
-        let ys = valid.map(p => Number(p[1]));
-        let minX = Math.min(...xs), maxX = Math.max(...xs), minY = Math.min(...ys), maxY = Math.max(...ys);
-        const padX = Math.max((maxX - minX) * .2, .25);
-        const padY = Math.max((maxY - minY) * .2, .25);
-        return { minX: minX - padX, maxX: maxX + padX, minY: minY - padY, maxY: maxY + padY };
-      }
-      function project(coord) {
-        const x = (Number(coord[0]) - bbox.minX) / (bbox.maxX - bbox.minX) * 760 + 20;
-        const y = 400 - ((Number(coord[1]) - bbox.minY) / (bbox.maxY - bbox.minY) * 380 + 10);
-        return [x, y];
-      }
-      function flatten(coords) {
-        if (!Array.isArray(coords)) return [];
-        if (typeof coords[0] === 'number') return [coords];
-        return coords.flatMap(flatten);
-      }
-      function make(tag, attrs) {
-        const el = document.createElementNS('http://www.w3.org/2000/svg', tag);
-        Object.keys(attrs || {}).forEach(k => el.setAttribute(k, attrs[k]));
-        svg.appendChild(el);
-        return el;
-      }
-      function drawBase() {
-        make('rect', { x: 0, y: 0, width: 800, height: 420, fill: '#e0f2fe' });
-        make('text', { x: 24, y: 32, fill: '#334155', 'font-size': 13 }).textContent = 'Approximate local overlay. Verify exact status on official map.';
-      }
-      function drawZone(zone) {
-        const geom = zone.geometry;
-        if (!geom || !geom.coordinates) return;
-        const polygons = geom.type === 'MultiPolygon' ? geom.coordinates : [geom.coordinates];
-        polygons.forEach(poly => {
-          const d = (poly || []).map(ring =>
-            ring.map((p, i) => {
-              const xy = project(p);
-              return `${i ? 'L' : 'M'}${xy[0].toFixed(1)},${xy[1].toFixed(1)}`;
-            }).join(' ') + ' Z'
-          ).join(' ');
+        L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
+          maxZoom: 19,
+          attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
+        }).addTo(map);
+
+        const overlays = [];
+        (data.zones || []).forEach(zone => {
+          if (!zone.geometry) return;
           const infested = /infested/i.test(zone.type || '');
-          make('path', { d, fill: infested ? '#ef444455' : '#f59e0b55', 'fill-rule': 'evenodd', stroke: infested ? '#dc2626' : '#d97706', 'stroke-width': 2 });
+          const layer = L.geoJSON(zone.geometry, {
+            style: {
+              color: infested ? '#dc2626' : '#d97706',
+              fillColor: infested ? '#ef4444' : '#f59e0b',
+              fillOpacity: .24,
+              weight: 2
+            }
+          }).bindTooltip([zone.name, zone.type].filter(Boolean).join(' - ') || 'Official zone');
+          layer.addTo(map);
+          overlays.push(layer);
         });
-      }
-      function drawCase(c) {
-        const xy = project([c.longitude, c.latitude]);
-        const fly = /fly/i.test(c.type || '');
-        make('circle', { cx: xy[0], cy: xy[1], r: 6, fill: fly ? '#0369a1' : '#7c3aed', stroke: 'white', 'stroke-width': 2 });
-      }
-      function drawRanch() {
-        if (!Number.isFinite(result.latitude) || !Number.isFinite(result.longitude)) {
-          make('text', { x: 300, y: 210, fill: '#475569', 'font-size': 16 }).textContent = 'Location not configured';
-          return;
+
+        (data.cases || []).forEach(item => {
+          if (!validCoordinate(item.latitude, item.longitude)) return;
+          const fly = /fly/i.test(item.type || '');
+          const layer = L.circleMarker([Number(item.latitude), Number(item.longitude)], {
+            radius: 7,
+            color: '#ffffff',
+            weight: 2,
+            fillColor: fly ? '#0369a1' : '#7c3aed',
+            fillOpacity: 1
+          }).bindTooltip([item.type, item.county].filter(Boolean).join(' - ') || 'Confirmed detection');
+          layer.addTo(map);
+          overlays.push(layer);
+        });
+
+        if (hasRanchLocation) {
+          const ranch = L.circleMarker([Number(result.latitude), Number(result.longitude)], {
+            radius: 9,
+            color: '#ffffff',
+            weight: 3,
+            fillColor: '#0f766e',
+            fillOpacity: 1
+          }).bindTooltip(locationLabel, { permanent: true, direction: 'right', offset: [8, 0] });
+          ranch.addTo(map);
+          overlays.push(ranch);
+        } else if (overlays.length) {
+          const group = L.featureGroup(overlays);
+          map.fitBounds(group.getBounds().pad(.15), { maxZoom: 9 });
+        } else {
+          map.setView([31, -99], 6);
         }
-        const xy = project([result.longitude, result.latitude]);
-        make('circle', { cx: xy[0], cy: xy[1], r: 9, fill: '#0f766e', stroke: 'white', 'stroke-width': 3 });
-        make('text', { x: xy[0] + 12, y: xy[1] - 10, fill: '#064e3b', 'font-size': 13, 'font-weight': 700 }).textContent = locationLabel;
+        window.setTimeout(() => map.invalidateSize(), 100);
+      }
+
+      function validCoordinate(latitude, longitude) {
+        if (latitude === null || latitude === undefined || latitude === '' ||
+            longitude === null || longitude === undefined || longitude === '') return false;
+        return Number.isFinite(Number(latitude)) &&
+          Number.isFinite(Number(longitude)) &&
+          Number(latitude) >= -90 &&
+          Number(latitude) <= 90 &&
+          Number(longitude) >= -180 &&
+          Number(longitude) <= 180;
+      }
+
+      function showMapMessage(message) {
+        const element = document.getElementById('map-message');
+        element.textContent = message;
+        element.style.display = 'flex';
       }
     </script>
   </body>
