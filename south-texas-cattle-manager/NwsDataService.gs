@@ -470,42 +470,55 @@ function nws_refreshTahcArcGis_() {
       if (layer.role === 'zone') {
         var unusableZoneCount = 0;
         var oversizedGeometryCount = 0;
-        var layerZones = normalized.map(function(item) {
+        var layerZones = [];
+        normalized.forEach(function(item) {
           var inferredType = item.zone_type !== 'Unknown'
             ? item.zone_type
             : nws_inferZoneTypeFromLayerTitle_(layer.title);
-          var serializedGeometry = nws_serializeGeometry_(item.geometry);
-          if (serializedGeometry.truncated) oversizedGeometryCount++;
+          var geometryPartition = nws_partitionGeometryForCells_(item.geometry);
+          if (geometryPartition.truncated) oversizedGeometryCount++;
+          var hasStoredGeometry = geometryPartition.parts.some(function(part) {
+            return !!part.serialized.text;
+          });
           var usable = inferredType !== 'Unknown' &&
-            (!!serializedGeometry.text || !!cattle_normalizeText_(item.county));
+            (hasStoredGeometry || !!cattle_normalizeText_(item.county));
           if (!usable) {
             unusableZoneCount++;
-            return null;
+            return;
           }
-          return {
-            Zone_Record_ID: 'TAHC:' + cattle_hashString_(layer.url + ':' + (layer.definitionExpression || '') + ':' + item.source_feature_id),
-            Source: 'Texas Animal Health Commission',
-            Source_Feature_ID: item.source_feature_id,
-            Zone_Name: typeof item.zone_name === 'string' && item.zone_name
-              ? item.zone_name
-              : (layer.title || ''),
-            Zone_Type: inferredType,
-            County_Names: item.county || '',
-            State: 'TX',
-            Effective_Date: item.effective_date || '',
-            End_Date: '',
-            Official_Status: item.case_status || '',
-            Geometry_Type: serializedGeometry.text ? (item.geometry_type || '') : '',
-            Geometry_GeoJSON: serializedGeometry.text,
-            Source_URL: CATTLEOS.TAHC_MAP_URL,
-            Source_Item_ID: CATTLEOS.TAHC_ARCGIS_ITEM_ID,
-            Source_Layer_URL: layer.url,
-            Source_Last_Modified: sourceLastModified,
-            Fetched_At: refreshedAt,
-            Data_Mode: 'Live',
-            Raw_Attributes_JSON: nws_jsonForCell_(item.raw_attributes)
-          };
-        }).filter(function(row) { return !!row; });
+          var storableParts = geometryPartition.parts.filter(function(part) {
+            return !!part.serialized.text;
+          });
+          if (!storableParts.length) storableParts = geometryPartition.parts.slice(0, 1);
+          storableParts.forEach(function(part, partIndex) {
+            var partKey = storableParts.length > 1 ? ':part:' + (partIndex + 1) : '';
+            layerZones.push({
+              Zone_Record_ID: 'TAHC:' + cattle_hashString_(
+                layer.url + ':' + (layer.definitionExpression || '') + ':' + item.source_feature_id + partKey
+              ),
+              Source: 'Texas Animal Health Commission',
+              Source_Feature_ID: item.source_feature_id,
+              Zone_Name: typeof item.zone_name === 'string' && item.zone_name
+                ? item.zone_name
+                : (layer.title || ''),
+              Zone_Type: inferredType,
+              County_Names: item.county || '',
+              State: 'TX',
+              Effective_Date: item.effective_date || '',
+              End_Date: '',
+              Official_Status: item.case_status || '',
+              Geometry_Type: part.serialized.text && part.geometry ? part.geometry.type : '',
+              Geometry_GeoJSON: part.serialized.text,
+              Source_URL: CATTLEOS.TAHC_MAP_URL,
+              Source_Item_ID: CATTLEOS.TAHC_ARCGIS_ITEM_ID,
+              Source_Layer_URL: layer.url,
+              Source_Last_Modified: sourceLastModified,
+              Fetched_At: refreshedAt,
+              Data_Mode: 'Live',
+              Raw_Attributes_JSON: nws_jsonForCell_(item.raw_attributes)
+            });
+          });
+        });
         zones = zones.concat(layerZones);
         if (unusableZoneCount) {
           var unusableError = {
@@ -784,6 +797,30 @@ function nws_serializeGeometry_(geometry) {
     Logger.log('Geometry compression failed: ' + compressionErr.message);
   }
   return { text: '', truncated: true };
+}
+
+function nws_partitionGeometryForCells_(geometry, optionalSerializer) {
+  var serializer = optionalSerializer || nws_serializeGeometry_;
+  var serialized = serializer(geometry);
+  var original = {
+    geometry: geometry,
+    serialized: serialized
+  };
+  if (!serialized.truncated || !geometry || geometry.type !== 'MultiPolygon' ||
+      !Array.isArray(geometry.coordinates) || !geometry.coordinates.length) {
+    return { parts: [original], partitioned: false, truncated: !!serialized.truncated };
+  }
+  var parts = geometry.coordinates.map(function(coordinates) {
+    var polygon = { type: 'Polygon', coordinates: coordinates };
+    return {
+      geometry: polygon,
+      serialized: serializer(polygon)
+    };
+  });
+  if (parts.some(function(part) { return !part.serialized.text || part.serialized.truncated; })) {
+    return { parts: [original], partitioned: false, truncated: true };
+  }
+  return { parts: parts, partitioned: true, truncated: false };
 }
 
 function nws_parseGeometryCell_(value) {

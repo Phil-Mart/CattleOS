@@ -99,7 +99,7 @@ Apps Script tests:
 Cattle Manager → Demo & Testing → Run All Tests
 ```
 
-The local runner validates syntax for all `.gs` files, compiles all HTML client scripts, and runs 114 pure tests, 7 HTML checks, and 3 checked-in fixture checks. Apps Script integration tests additionally verify workbook setup, named range creation, migration idempotence, and sheet structure.
+The local runner validates syntax for all `.gs` files, compiles all HTML client scripts, and runs 115 pure tests, 7 HTML checks, and 3 checked-in fixture checks. Apps Script integration tests additionally verify workbook setup, named range creation, migration idempotence, and sheet structure.
 
 ## Safety Boundary
 

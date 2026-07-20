@@ -317,6 +317,27 @@ function test_arcgisAdapter_() {
   results.push(test_assert_('Non-ArcGIS URLs are rejected by ArcGIS adapter', test_throws_(function() {
     arc_assertPublicUrl_('https://example.com/FeatureServer/0');
   })));
+  var oversizedMultiPolygon = {
+    type: 'MultiPolygon',
+    coordinates: [
+      [[[-99, 28], [-98, 28], [-98, 29], [-99, 29], [-99, 28]]],
+      [[[-97, 27], [-96, 27], [-96, 28], [-97, 28], [-97, 27]]]
+    ]
+  };
+  var partitionedGeometry = nws_partitionGeometryForCells_(oversizedMultiPolygon, function(geometry) {
+    return geometry.type === 'MultiPolygon'
+      ? { text: '', truncated: true }
+      : { text: JSON.stringify(geometry), truncated: false };
+  });
+  results.push(test_assert_(
+    'Oversized TAHC multipolygons split into storable polygon records',
+    partitionedGeometry.partitioned &&
+      !partitionedGeometry.truncated &&
+      partitionedGeometry.parts.length === 2 &&
+      partitionedGeometry.parts.every(function(part) {
+        return part.geometry.type === 'Polygon' && !!part.serialized.text;
+      })
+  ));
   return results;
 }
 

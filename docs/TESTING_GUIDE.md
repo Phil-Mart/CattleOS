@@ -11,7 +11,7 @@ node tools/run_local_tests.js
 Expected result:
 
 ```text
-Passed 114 pure unit tests, 7 HTML checks, and 3 fixture checks.
+Passed 115 pure unit tests, 7 HTML checks, and 3 fixture checks.
 ```
 
 Coverage includes:
