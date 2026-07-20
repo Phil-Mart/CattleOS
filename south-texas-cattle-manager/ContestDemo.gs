@@ -3,6 +3,7 @@ function contest_loadDemoData() {
 }
 
 function contest_loadNwsDemoScenario() {
+  contest_assertDemoDependencies_();
   return cattle_withDocumentLock_('LOAD_NWS_DEMO', function() {
     setup_ensureWorkbookStructure_();
     settings_ensureDefaults();
@@ -43,6 +44,26 @@ function contest_loadNwsDemoScenario() {
     cattle_getSpreadsheet_().setActiveSheet(cattle_getSheet_(CATTLEOS.WATCH_SHEET));
     cattle_uiAlert_('Contest Demo Loaded', 'DEMO DATA — NOT CURRENT OUTBREAK INFORMATION. The scenario includes simulated zones, detections, animals, wound records, tasks, and a mock GPT-5.6 brief.');
     return true;
+  });
+}
+
+function contest_assertDemoDependencies_(optionalAvailability) {
+  var missing = contest_missingDemoDependencies_(optionalAvailability);
+  if (!missing.length) return true;
+  throw new Error(
+    'CattleOS installation is incomplete. RanchBrief.gs is missing or outdated (' +
+    missing.join(', ') +
+    '). Sync every file from south-texas-cattle-manager, save the Apps Script project, reload the Sheet, and run Setup / Repair Workbook.'
+  );
+}
+
+function contest_missingDemoDependencies_(optionalAvailability) {
+  var availability = optionalAvailability || {
+    brief_generateMockBrief: typeof brief_generateMockBrief === 'function',
+    brief_getLatestBriefSummary_: typeof brief_getLatestBriefSummary_ === 'function'
+  };
+  return Object.keys(availability).filter(function(name) {
+    return availability[name] !== true;
   });
 }
 

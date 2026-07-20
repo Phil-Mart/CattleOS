@@ -379,6 +379,18 @@ function test_coreSafety_() {
   results.push(test_assert_('Animal-level NWS findings are not whole-herd inspections', !nws_isWholeHerdInspection_({ Scope: 'Animal', Findings: 'NWS wound check' })));
   results.push(test_assert_('Whole-herd scope ID is recognized', nws_isWholeHerdInspection_({ Scope_ID: 'WHOLE_HERD' })));
   results.push(test_assert_('Future source timestamps do not produce negative age', nws_ageHours_(new Date(new Date().getTime() + 3600000).toISOString()) === 0));
+  results.push(test_assert_('Complete demo dependencies pass preflight', contest_missingDemoDependencies_({
+    brief_generateMockBrief: true,
+    brief_getLatestBriefSummary_: true
+  }).length === 0));
+  results.push(test_assert_('Missing Ranch Brief helper is named by demo preflight', contest_missingDemoDependencies_({
+    brief_generateMockBrief: true,
+    brief_getLatestBriefSummary_: false
+  })[0] === 'brief_getLatestBriefSummary_'));
+  results.push(test_assert_('Dashboard reports an unavailable Ranch Brief module without crashing', nws_getLatestBriefSummarySafe_(null) === 'Ranch Brief unavailable - sync RanchBrief.gs'));
+  results.push(test_assert_('Dashboard uses the installed Ranch Brief summary helper', nws_getLatestBriefSummarySafe_(function() {
+    return 'Latest fixture brief';
+  }) === 'Latest fixture brief'));
   results.push(test_assert_('Unchanged snapshots ignore fetch timestamp only', nws_rowsEquivalent_(
     ['Zone_Record_ID', 'Fetched_At', 'Data_Mode'],
     [{ Zone_Record_ID: 'Z1', Fetched_At: 'one', Data_Mode: 'Live' }],

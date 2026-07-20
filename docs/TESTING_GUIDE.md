@@ -11,7 +11,7 @@ node tools/run_local_tests.js
 Expected result:
 
 ```text
-Passed 100 pure unit tests, 5 HTML checks, and 3 fixture checks.
+Passed 104 pure unit tests, 5 HTML checks, and 3 fixture checks.
 ```
 
 Coverage includes:
@@ -25,6 +25,7 @@ Coverage includes:
 - GPT structured-output validation, invented source ID rejection, treatment/dosage rejection, suspected-record confirmation rejection, and deterministic fallback.
 - Date, snapshot comparison, response extraction, and safe HTML-template serialization.
 - Formula-like external text sanitization and complete demo/live mode columns.
+- Demo dependency preflight and missing Ranch Brief dashboard fallback.
 - Browser-side JavaScript compilation and five-digit onboarding ZIP validation.
 - Checked-in ArcGIS coded-domain, filtered-web-map, and USDA endpoint-discovery fixtures.
 

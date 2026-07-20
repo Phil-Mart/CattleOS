@@ -31,6 +31,13 @@ The workspace was empty except for git metadata when Codex began. The Version 1.
 6. Return to the sheet and reload it.
 7. Use **Cattle Manager → Setup / Repair Workbook** if the menu is not already visible.
 
+All `.gs` files are required. If a menu action reports that a function such as
+`brief_getLatestBriefSummary_` is not defined, the bound Apps Script project is
+out of date or missing `RanchBrief.gs`. Replace it with the complete repository
+copy, save the project, reload the Sheet, run **Cattle Manager → Setup / Repair
+Workbook**, and retry the action. The demo loader checks these dependencies
+before changing workbook data.
+
 Optional `clasp` path:
 
 ```bash
@@ -92,7 +99,7 @@ Apps Script tests:
 Cattle Manager → Demo & Testing → Run All Tests
 ```
 
-The local runner validates syntax for all `.gs` files, compiles all HTML client scripts, and runs 100 pure tests, 5 HTML checks, and 3 checked-in fixture checks. Apps Script integration tests additionally verify workbook setup, named range creation, migration idempotence, and sheet structure.
+The local runner validates syntax for all `.gs` files, compiles all HTML client scripts, and runs 104 pure tests, 5 HTML checks, and 3 checked-in fixture checks. Apps Script integration tests additionally verify workbook setup, named range creation, migration idempotence, and sheet structure.
 
 ## Safety Boundary
 

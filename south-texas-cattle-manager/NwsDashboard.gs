@@ -194,7 +194,7 @@ function nws_renderDashboard_(result, workflow) {
     ['Herd Workflow', 'Animals with unresolved open wounds', workflow ? workflow.animalsWithOpenWounds.length : nws_findAnimalsWithOpenWounds_().length, now, 'From Health records'],
     ['Herd Workflow', 'Overdue wound follow-ups', workflow ? workflow.overdueWoundFollowUps : nws_countOverdueWoundFollowUps_(), now, 'From Health follow-up due dates'],
     ['Herd Workflow', 'Next recommended inspection', workflow ? workflow.nextInspectionDue : nws_nextInspectionDue_(result.operational_attention), now, 'Risk-based cadence is a management default'],
-    ['Ranch Brief', 'Latest brief', brief_getLatestBriefSummary_(), now, 'OpenAI live, mock, or deterministic fallback']
+    ['Ranch Brief', 'Latest brief', nws_getLatestBriefSummarySafe_(), now, 'OpenAI live, mock, or deterministic fallback']
   ];
   sheet.getRange(5, 1, Math.max(sheet.getMaxRows() - 4, 1), 5).clearContent();
   sheet.getRange(5, 1, rows.length, 5).setValues(cattle_safeMatrix_(rows)).setWrap(true);
@@ -202,6 +202,14 @@ function nws_renderDashboard_(result, workflow) {
   sheet.getRange('A3:E3').merge().setValue(banner.message).setFontWeight('bold').setWrap(true)
     .setBackground(banner.background).setFontColor(banner.foreground);
   sheet.autoResizeColumns(1, 5);
+}
+
+function nws_getLatestBriefSummarySafe_(optionalGetter) {
+  var getter = arguments.length
+    ? optionalGetter
+    : (typeof brief_getLatestBriefSummary_ === 'function' ? brief_getLatestBriefSummary_ : null);
+  if (typeof getter !== 'function') return 'Ranch Brief unavailable - sync RanchBrief.gs';
+  return getter();
 }
 
 function nws_buildInspectionQueue() {
