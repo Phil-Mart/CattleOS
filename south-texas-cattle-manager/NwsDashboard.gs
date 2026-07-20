@@ -156,7 +156,8 @@ function nws_renderWatch_(result, workflow) {
     result.official_zone_status || 'Unknown',
     result.operational_attention || 'Data Unavailable',
     result.county || '',
-    cattle_formatDistance_(result.nearest_detection_miles),
+    cattle_formatDistance_(result.nearest_detection_miles) +
+      (result.nearest_detection_precision ? ' (approx. county centroid)' : ''),
     result.official_data_health || health.state,
     workflow ? workflow.lastInspectionSummary : nws_getLastInspectionSummary_(),
     workflow ? workflow.animalsWithOpenWounds.length : nws_findAnimalsWithOpenWounds_().length,
@@ -187,7 +188,8 @@ function nws_renderDashboard_(result, workflow) {
     ['New World Screwworm Watch', 'Location precision', result.location_precision || '', now, CATTLEOS.SAFETY_NOTICE],
     ['New World Screwworm Watch', 'Official zone status', result.official_zone_status, now, result.explanation || ''],
     ['New World Screwworm Watch', 'Operational attention', result.operational_attention, now, 'Management workflow level, not a legal status'],
-    ['New World Screwworm Watch', 'Nearest confirmed detection', cattle_formatDistance_(result.nearest_detection_miles), now, result.nearest_detection_county || 'Shown only when coordinates are reliable'],
+    ['New World Screwworm Watch', 'Nearest confirmed detection', cattle_formatDistance_(result.nearest_detection_miles), now,
+      [result.nearest_detection_county, result.nearest_detection_precision].filter(String).join(' - ') || 'Shown only when coordinates are reliable'],
     ['New World Screwworm Watch', 'Official data health', result.official_data_health, now, nws_describeDataHealth_(nws_getDataHealth())],
     ['New World Screwworm Watch', 'Last official refresh', result.official_data_refreshed_at || '', now, 'Live, delayed, unavailable, and demo states remain visible'],
     ['Herd Workflow', 'Last whole-herd inspection', workflow ? workflow.lastInspectionSummary : nws_getLastInspectionSummary_(), now, 'From Inspections sheet'],
@@ -440,11 +442,13 @@ function nws_getMapData_() {
   }).filter(function(row) { return row.geometry; }).slice(0, 60);
   var cases = nws_getStoredCases_().map(function(row) {
     var point = risk_normalizePoint_({ latitude: row.Latitude, longitude: row.Longitude });
+    var raw = cattle_parseJsonSafe_(row.Raw_Attributes_JSON, {});
     return {
       id: row.Case_Record_ID,
       type: row.Detection_Type,
       county: row.County,
       mode: row.Data_Mode,
+      coordinatePrecision: raw.coordinate_precision || '',
       latitude: point.valid ? point.lat : null,
       longitude: point.valid ? point.lng : null
     };
@@ -480,6 +484,7 @@ function nws_emptyRiskResult_(message) {
     operational_attention: 'Data Unavailable',
     nearest_detection_miles: null,
     nearest_detection_county: '',
+    nearest_detection_precision: '',
     official_data_health: settings_get('NWS_Data_Health', 'Not Initialized'),
     official_data_refreshed_at: settings_get('NWS_Last_Successful_Refresh', ''),
     caveats: ['ZIP centroid is not the exact ranch location', 'Official zones may cover only part of a county'],

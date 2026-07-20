@@ -11,7 +11,7 @@ node tools/run_local_tests.js
 Expected result:
 
 ```text
-Passed 106 pure unit tests, 7 HTML checks, and 3 fixture checks.
+Passed 114 pure unit tests, 7 HTML checks, and 3 fixture checks.
 ```
 
 Coverage includes:
@@ -27,6 +27,7 @@ Coverage includes:
 - Formula-like external text sanitization and complete demo/live mode columns.
 - Demo dependency preflight and missing Ranch Brief dashboard fallback.
 - Interactive OpenStreetMap initialization and GeoJSON zone overlays.
+- USDA Tableau CSV discovery, host validation, normalization, and approximate county-centroid metadata.
 - Ranch Brief logging when user-email permission is unavailable.
 - Browser-side JavaScript compilation and five-digit onboarding ZIP validation.
 - Checked-in ArcGIS coded-domain, filtered-web-map, and USDA endpoint-discovery fixtures.

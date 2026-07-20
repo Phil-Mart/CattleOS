@@ -21,7 +21,9 @@ USDA APHIS is treated as authoritative for confirmed animal and wild-fly detecti
 - Current status landing page: <https://www.aphis.usda.gov/animals/animal-health/livestock-and-poultry-disease/current-status>
 - General response page: <https://www.aphis.usda.gov/animals/animal-health/livestock-and-poultry-disease/stop-screwworm>
 
-The USDA adapter uses structured public endpoints only when discoverable from the public dashboard page. If no stable endpoint is found, CattleOS shows the official dashboard link and marks that adapter degraded rather than scraping rendered dashboard text as live data. This expected link-only fallback does not by itself stale an otherwise-current TAHC Texas zone snapshot; nearest-detection distance remains unavailable until structured confirmed-detection data are present.
+The USDA adapter discovers the official public Tableau view embedded in the APHIS page and downloads its CSV export. It validates the exact USDA dashboard host and expected view path before fetching, then imports case ID, county, state, species, confirmation date, and active/inactive status. If USDA changes or removes that structured export, CattleOS falls back to an approved ArcGIS endpoint when available or otherwise shows the official dashboard link and marks the adapter degraded.
+
+USDA publishes these detections by county rather than premises coordinates. CattleOS geocodes each unique county once and plots an explicitly labeled approximate county centroid. Distances involving these records are management approximations, not premises distances or regulatory boundaries.
 
 ## Google Apps Script
 

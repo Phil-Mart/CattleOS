@@ -97,6 +97,7 @@ function risk_evaluateRanchNwsStatus(location, zones, cases, dataHealth) {
     operational_attention: 'Data Unavailable',
     nearest_detection_miles: null,
     nearest_detection_county: '',
+    nearest_detection_precision: '',
     official_data_health: health.state,
     official_data_refreshed_at: health.lastSuccess || '',
     caveats: caveats,
@@ -183,6 +184,10 @@ function risk_evaluateRanchNwsStatus(location, zones, cases, dataHealth) {
   var nearest = risk_nearestDetection_(point, cases || []);
   result.nearest_detection_miles = nearest ? nearest.miles : null;
   result.nearest_detection_county = nearest ? nearest.county : '';
+  result.nearest_detection_precision = nearest ? nearest.precision : '';
+  if (nearest && nearest.precision) {
+    result.caveats.push('USDA detection distance uses an approximate county centroid, not the affected premises');
+  }
   var threshold = settings_getNumber ? settings_getNumber('NWS_Proximity_Warning_Miles', 50) : 50;
   var nearDetection = nearest && nearest.miles <= threshold;
 
@@ -214,7 +219,9 @@ function risk_evaluateRanchNwsStatus(location, zones, cases, dataHealth) {
 
   if (nearDetection && result.operational_attention === 'Routine') {
     result.operational_attention = 'Heightened';
-    result.explanation = 'A confirmed detection is within the configured operational proximity threshold. This threshold is not an official regulatory boundary.';
+    result.explanation = 'A confirmed detection' +
+      (nearest.precision ? ' represented by an approximate county centroid' : '') +
+      ' is within the configured operational proximity threshold. This threshold is not an official regulatory boundary.';
   }
   if (health.state === 'Delayed' && result.operational_attention === 'Routine') {
     result.operational_attention = 'Heightened';
@@ -424,11 +431,21 @@ function risk_nearestDetection_(point, cases) {
       nearest = {
         miles: miles,
         county: record.County || record.county || '',
+        precision: risk_detectionCoordinatePrecision_(record),
         record: record
       };
     }
   });
   return nearest;
+}
+
+function risk_detectionCoordinatePrecision_(record) {
+  record = record || {};
+  if (record.Coordinate_Precision || record.coordinate_precision) {
+    return record.Coordinate_Precision || record.coordinate_precision;
+  }
+  var raw = cattle_parseJsonSafe_(record.Raw_Attributes_JSON || record.raw_attributes_json || '', {});
+  return raw && raw.coordinate_precision ? cattle_normalizeText_(raw.coordinate_precision) : '';
 }
 
 function risk_countyListMatches_(zoneCountyText, county) {

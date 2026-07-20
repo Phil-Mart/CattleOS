@@ -264,6 +264,33 @@ function test_arcgisAdapter_() {
   results.push(test_assert_('Empty layer fixture normalizes empty list', arc_normalizeFeatures({ type: 'FeatureCollection', features: [] }, {}).length === 0));
   var html = '<script>const url="https://services.arcgis.com/example/ArcGIS/rest/services/NWS/FeatureServer/0";</script>';
   results.push(test_assert_('USDA endpoint discovery fixture finds FeatureServer layer', nws_extractStructuredEndpoints_(html).length === 1));
+  var tableauHtml = '<iframe src="https://publicdashboards.dl.usda.gov/t/MRP_PUB/views/NewWorldScrewwormPublicReporting_17805168329840/SummaryDashboard?%3Aembed=y&amp;%3AshowVizHome=no"></iframe>';
+  var tableauUrl = nws_extractUsdaTableauCsvUrl_(tableauHtml);
+  results.push(test_assert_(
+    'USDA Tableau iframe resolves to the approved CSV export',
+    tableauUrl === 'https://publicdashboards.dl.usda.gov/t/MRP_PUB/views/NewWorldScrewwormPublicReporting_17805168329840/SummaryDashboard.csv?:showVizHome=no'
+  ));
+  results.push(test_assert_('Non-USDA Tableau hosts are ignored', nws_extractUsdaTableauCsvUrl_(
+    '<iframe src="https://example.com/t/MRP_PUB/views/workbook/view"></iframe>'
+  ) === ''));
+  results.push(test_assert_('Approved USDA Tableau CSV URL passes host validation', !test_throws_(function() {
+    nws_assertOfficialUrl_(tableauUrl);
+  })));
+  var centroidCalls = 0;
+  var usdaCases = nws_usdaTableRowsToCases_([
+    ['Animal ID', 'Animal Type', 'Case Type', 'Confirmed Date', 'County', 'Species', 'State', 'Status'],
+    ['TX-1', 'Domestic', 'Domestic', '7/18/2026', 'Starr', 'Cattle', 'Texas', 'Active'],
+    ['TX-2', 'Fly Trap', 'Fly Trap', '7/19/2026', 'Starr', '', 'Texas', 'Active']
+  ], function() {
+    centroidCalls++;
+    return { lat: 26.56, lng: -98.74 };
+  });
+  results.push(test_assert_('USDA Tableau rows normalize into official case records', usdaCases.length === 2 && usdaCases[0].Official_Case_ID === 'TX-1'));
+  results.push(test_assert_('USDA county centroid is resolved once per county', centroidCalls === 1));
+  results.push(test_assert_('USDA fly-trap rows remain distinct from animal cases', usdaCases[1].Detection_Type === 'Confirmed Wild-Fly Detection'));
+  results.push(test_assert_('USDA case records retain county-centroid precision metadata', cattle_parseJsonSafe_(
+    usdaCases[0].Raw_Attributes_JSON, {}
+  ).coordinate_precision.indexOf('Approximate county centroid') === 0));
   results.push(test_assert_('Combined zone layer title is not used as an ambiguous fallback', nws_inferZoneTypeFromLayerTitle_('Infested and Surveillance Zones') === 'Unknown'));
   results.push(test_assert_('Expected USDA dashboard fallback does not stale Texas zone data', nws_isExpectedUsdaLinkFallback_({
     Source_Key: 'usda-confirmed-cases',
@@ -379,6 +406,9 @@ function test_coreSafety_() {
   results.push(test_assert_('Animal-level NWS findings are not whole-herd inspections', !nws_isWholeHerdInspection_({ Scope: 'Animal', Findings: 'NWS wound check' })));
   results.push(test_assert_('Whole-herd scope ID is recognized', nws_isWholeHerdInspection_({ Scope_ID: 'WHOLE_HERD' })));
   results.push(test_assert_('Future source timestamps do not produce negative age', nws_ageHours_(new Date(new Date().getTime() + 3600000).toISOString()) === 0));
+  results.push(test_assert_('Detection precision is recovered from stored USDA source metadata', risk_detectionCoordinatePrecision_({
+    Raw_Attributes_JSON: '{"coordinate_precision":"Approximate county centroid"}'
+  }) === 'Approximate county centroid'));
   results.push(test_assert_('Complete demo dependencies pass preflight', contest_missingDemoDependencies_({
     brief_generateMockBrief: true,
     brief_getLatestBriefSummary_: true

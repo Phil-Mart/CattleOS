@@ -12,7 +12,7 @@
 - Version 1.1 migration and setup/repair workflow.
 - ZIP onboarding and geocoding service.
 - TAHC ArcGIS discovery adapter.
-- USDA structured-endpoint discovery with official dashboard fallback.
+- USDA official Tableau CSV import, approved structured-endpoint discovery, and dashboard fallback.
 - New World screwworm data-health states and last-known-good behavior.
 - Deterministic geospatial risk engine.
 - `NWS_Watch` interface, local map dialog, dashboard section, and official links.

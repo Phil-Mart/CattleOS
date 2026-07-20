@@ -24,6 +24,7 @@
       a { color: #0369a1; font-weight: 700; }
       .legend { display: grid; gap: 6px; margin-top: 8px; }
       .legend span { display: inline-block; width: 12px; height: 12px; border-radius: 50%; margin-right: 6px; vertical-align: -1px; }
+      .legend-note { color: #475569; font-size: 11px; line-height: 1.35; margin-top: 4px; }
       .poly { border-radius: 2px !important; }
       .leaflet-control-attribution { font-size: 10px; }
       @media (max-width: 700px) { .wrap { grid-template-columns: 1fr; } #map { height: 340px; } }
@@ -54,6 +55,7 @@
           <div><span style="background:#7c3aed"></span>Confirmed animal case</div>
           <div><span style="background:#0369a1"></span>Confirmed wild-fly detection</div>
           <div><span style="background:#94a3b8"></span>Data unavailable</div>
+          <div class="legend-note">USDA locations are approximate county centroids because premises coordinates are not published in the dashboard export.</div>
         </div>
       </aside>
     </div>
@@ -74,7 +76,9 @@
       document.getElementById('zone').textContent = result.official_zone_status || 'Unknown';
       document.getElementById('attention').textContent = result.operational_attention || 'Data Unavailable';
       document.getElementById('location').textContent = [result.city, result.county, result.state, result.zip].filter(Boolean).join(', ') || 'Not configured';
-      document.getElementById('nearest').textContent = Number.isFinite(result.nearest_detection_miles) ? `${result.nearest_detection_miles.toFixed(1)} miles` : 'Data unavailable';
+      document.getElementById('nearest').textContent = Number.isFinite(result.nearest_detection_miles)
+        ? `${result.nearest_detection_miles.toFixed(1)} miles${result.nearest_detection_precision ? ' (approx. county centroid)' : ''}`
+        : 'Data unavailable';
       document.getElementById('health').textContent = result.official_data_health || 'Not Initialized';
       document.getElementById('tahc').href = data.tahcUrl;
       document.getElementById('usda').href = data.usdaUrl;
@@ -115,16 +119,27 @@
           overlays.push(layer);
         });
 
+        const caseGroups = {};
         (data.cases || []).forEach(item => {
           if (!validCoordinate(item.latitude, item.longitude)) return;
+          const key = [item.type, item.county, item.latitude, item.longitude].join('|');
+          if (!caseGroups[key]) caseGroups[key] = Object.assign({ count: 0 }, item);
+          caseGroups[key].count += 1;
+        });
+        Object.keys(caseGroups).forEach(key => {
+          const item = caseGroups[key];
           const fly = /fly/i.test(item.type || '');
           const layer = L.circleMarker([Number(item.latitude), Number(item.longitude)], {
-            radius: 7,
+            radius: Math.min(13, 7 + Math.log2(item.count || 1)),
             color: '#ffffff',
             weight: 2,
             fillColor: fly ? '#0369a1' : '#7c3aed',
             fillOpacity: 1
-          }).bindTooltip([item.type, item.county].filter(Boolean).join(' - ') || 'Confirmed detection');
+          }).bindTooltip([
+            (item.count || 1) + ' ' + (item.type || 'confirmed detection') + ((item.count || 1) === 1 ? '' : 's'),
+            item.county,
+            item.coordinatePrecision
+          ].filter(Boolean).join(' - '));
           layer.addTo(map);
           overlays.push(layer);
         });
@@ -139,10 +154,11 @@
           }).bindTooltip(locationLabel, { permanent: true, direction: 'right', offset: [8, 0] });
           ranch.addTo(map);
           overlays.push(ranch);
-        } else if (overlays.length) {
+        }
+        if (overlays.length > (hasRanchLocation ? 1 : 0)) {
           const group = L.featureGroup(overlays);
           map.fitBounds(group.getBounds().pad(.15), { maxZoom: 9 });
-        } else {
+        } else if (!hasRanchLocation) {
           map.setView([31, -99], 6);
         }
         window.setTimeout(() => map.invalidateSize(), 100);

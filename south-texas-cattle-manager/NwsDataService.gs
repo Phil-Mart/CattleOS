@@ -31,6 +31,14 @@ function nws_refreshOfficialDataUnlocked_() {
     return nws_getDataHealth();
   }
 
+  try {
+    nws_resolveConfiguredZipForRefresh_();
+  } catch (locationErr) {
+    audit_log('WARN', 'PRE_REFRESH_LOCATION_FAILED', 'Official data will refresh, but the configured ZIP could not be resolved.', {
+      error: locationErr.message
+    });
+  }
+
   var tahcResult;
   var usdaResult;
   try {
@@ -85,6 +93,17 @@ function nws_refreshOfficialDataManual() {
   var health = nws_refreshOfficialData();
   cattle_uiAlert_('Official Data Refresh', nws_describeDataHealth_(health));
   return health;
+}
+
+function nws_resolveConfiguredZipForRefresh_() {
+  var location = loc_getRanchLocation();
+  var point = risk_normalizePoint_(location);
+  var zip = loc_validateZip(settings_get('Ranch_ZIP', ''));
+  var hasLocationIdentity = cattle_normalizeText_(location.state) &&
+    cattle_normalizeText_(location.county);
+  if (point.valid && hasLocationIdentity) return location;
+  if (!zip.valid) return location;
+  return loc_updateFromZip(zip.zip);
 }
 
 function nws_installRefreshTrigger() {
@@ -210,20 +229,39 @@ function nws_fetchUsdaDashboardMetadata() {
     sourceUrl: CATTLEOS.USDA_CASES_URL,
     fetchedAt: cattle_nowIso_(),
     endpointCount: endpoints.length,
-    endpoints: endpoints
+    endpoints: endpoints,
+    tableauCsvUrl: nws_extractUsdaTableauCsvUrl_(response.text)
   };
 }
 
 function nws_fetchUsdaCases() {
   var metadata = nws_fetchUsdaDashboardMetadata();
-  if (!metadata.endpoints.length) {
-    return {
-      ok: false,
-      cases: [],
-      method: 'dashboard-link-only',
-      message: 'No stable structured USDA endpoint was discovered from the public dashboard page.'
-    };
+  var tableauError = '';
+  if (metadata.tableauCsvUrl) {
+    try {
+      var csvResponse = nws_fetchUrl_(metadata.tableauCsvUrl);
+      if (csvResponse.code < 200 || csvResponse.code >= 300) {
+        throw new Error('HTTP ' + csvResponse.code + ' fetching USDA Tableau CSV export');
+      }
+      var tableauCases = nws_parseUsdaTableauCsv_(csvResponse.text);
+      if (tableauCases.length) {
+        return {
+          ok: true,
+          cases: tableauCases,
+          method: 'official-tableau-csv',
+          endpointCount: 1
+        };
+      }
+      tableauError = 'The USDA Tableau CSV export contained no case rows.';
+    } catch (tableauErr) {
+      tableauError = tableauErr.message;
+      audit_log('WARN', 'USDA_TABLEAU_CSV_FAILED', 'The USDA Tableau CSV export could not be loaded.', {
+        endpoint: metadata.tableauCsvUrl,
+        error: tableauErr.message
+      });
+    }
   }
+
   var cases = [];
   metadata.endpoints.slice(0, 3).forEach(function(endpoint) {
     try {
@@ -256,7 +294,130 @@ function nws_fetchUsdaCases() {
       audit_log('WARN', 'USDA_ENDPOINT_QUERY_FAILED', 'A discovered USDA endpoint could not be queried.', { endpoint: endpoint, error: err.message });
     }
   });
-  return { ok: cases.length > 0, cases: cases, method: 'structured-public-endpoint', endpointCount: metadata.endpoints.length };
+  return {
+    ok: cases.length > 0,
+    cases: cases,
+    method: cases.length ? 'structured-public-endpoint' : 'dashboard-link-only',
+    endpointCount: metadata.endpoints.length,
+    message: cases.length
+      ? ''
+      : (tableauError || 'No stable structured USDA endpoint was discovered from the public dashboard page.')
+  };
+}
+
+function nws_extractUsdaTableauCsvUrl_(html) {
+  var text = String(html || '')
+    .replace(/&amp;/g, '&')
+    .replace(/&#x3A;/gi, ':')
+    .replace(/&#58;/g, ':');
+  var match = text.match(/https:\/\/publicdashboards\.dl\.usda\.gov\/t\/MRP_PUB\/views\/[A-Za-z0-9_.%~-]+\/[A-Za-z0-9_.%~-]+(?:\?[^"'<>\\\s]*)?/i);
+  if (!match) return '';
+  var base = match[0].split('?')[0].replace(/\/+$/, '');
+  var csvUrl = base + '.csv?:showVizHome=no';
+  try {
+    nws_assertOfficialUrl_(csvUrl);
+    return csvUrl;
+  } catch (err) {
+    return '';
+  }
+}
+
+function nws_parseUsdaTableauCsv_(csvText) {
+  return nws_usdaTableRowsToCases_(Utilities.parseCsv(String(csvText || '')));
+}
+
+function nws_usdaTableRowsToCases_(table, optionalCentroidResolver) {
+  if (!Array.isArray(table) || table.length < 2) return [];
+  var headerIndex = {};
+  (table[0] || []).forEach(function(header, index) {
+    headerIndex[nws_usdaHeaderKey_(header)] = index;
+  });
+  ['animalid', 'confirmeddate', 'county', 'state', 'status'].forEach(function(required) {
+    if (!Object.prototype.hasOwnProperty.call(headerIndex, required)) {
+      throw new Error('USDA Tableau CSV is missing required column: ' + required);
+    }
+  });
+  var centroidResolver = optionalCentroidResolver || nws_geocodeCountyCentroid_;
+  var centroidCache = {};
+  var fetchedAt = cattle_nowIso_();
+  return table.slice(1).map(function(values) {
+    function value(header) {
+      var index = headerIndex[nws_usdaHeaderKey_(header)];
+      return index === undefined ? '' : cattle_normalizeText_(values[index]);
+    }
+    var officialId = value('Animal ID');
+    var county = value('County');
+    var state = value('State');
+    var confirmedDate = value('Confirmed Date');
+    if (!officialId && !county && !confirmedDate) return null;
+    var centroidKey = (county + '|' + state).toLowerCase();
+    if (!Object.prototype.hasOwnProperty.call(centroidCache, centroidKey)) {
+      centroidCache[centroidKey] = centroidResolver(county, state) || null;
+    }
+    var centroid = centroidCache[centroidKey];
+    var raw = {};
+    (table[0] || []).forEach(function(header, index) {
+      raw[String(header)] = values[index] === undefined ? '' : values[index];
+    });
+    raw.source_method = 'USDA public Tableau CSV export';
+    raw.coordinate_precision = centroid
+      ? 'Approximate county centroid; USDA does not publish premises coordinates in this export'
+      : 'County only; coordinates unavailable';
+    var caseType = [value('Case Type'), value('Animal Type')].join(' ');
+    return {
+      Case_Record_ID: 'USDA:' + cattle_hashString_([officialId, confirmedDate, county, state].join('|')),
+      Source: 'USDA APHIS',
+      Official_Case_ID: officialId,
+      Detection_Type: /fly/i.test(caseType) ? 'Confirmed Wild-Fly Detection' : 'Confirmed Animal Case',
+      State: state,
+      County: county,
+      Animal_Type: value('Animal Type'),
+      Species: value('Species'),
+      Confirmation_Date: confirmedDate,
+      Case_Status: value('Status'),
+      Latitude: centroid ? centroid.lat : '',
+      Longitude: centroid ? centroid.lng : '',
+      Source_URL: CATTLEOS.USDA_CASES_URL,
+      Source_Last_Modified: '',
+      Fetched_At: fetchedAt,
+      Data_Mode: 'Live',
+      Raw_Attributes_JSON: nws_jsonForCell_(raw)
+    };
+  }).filter(function(row) {
+    return !!row;
+  });
+}
+
+function nws_usdaHeaderKey_(value) {
+  return cattle_normalizeText_(value).toLowerCase().replace(/[^a-z0-9]+/g, '');
+}
+
+function nws_geocodeCountyCentroid_(county, state) {
+  var normalizedCounty = cattle_normalizeText_(county);
+  var normalizedState = cattle_normalizeText_(state);
+  if (!normalizedCounty || !normalizedState) return null;
+  var query = normalizedCounty + (/county$/i.test(normalizedCounty) ? '' : ' County') +
+    ', ' + normalizedState + ', USA';
+  var cache = CacheService.getScriptCache();
+  var cacheKey = 'usda-county-centroid:' + cattle_hashString_(query.toLowerCase());
+  try {
+    var cached = cache.get(cacheKey);
+    if (cached) return cattle_parseJsonSafe_(cached, null);
+  } catch (cacheReadErr) {
+    Logger.log('USDA county-centroid cache read skipped: ' + cacheReadErr.message);
+  }
+  var response = Maps.newGeocoder().setRegion('US').geocode(query);
+  var first = response && response.results && response.results.length ? response.results[0] : null;
+  var geometry = first && first.geometry ? first.geometry.location : null;
+  var point = risk_normalizePoint_(geometry ? { latitude: geometry.lat, longitude: geometry.lng } : null);
+  if (!point.valid) return null;
+  var result = { lat: point.lat, lng: point.lng };
+  try {
+    cache.put(cacheKey, JSON.stringify(result), 21600);
+  } catch (cacheWriteErr) {
+    Logger.log('USDA county-centroid cache write skipped: ' + cacheWriteErr.message);
+  }
+  return result;
 }
 
 function nws_normalizeUsdaCases(rawCases) {
@@ -732,7 +893,9 @@ function nws_describeDataHealth_(health) {
 }
 
 function nws_assertOfficialUrl_(url) {
-  if (!/^https:\/\/www\.aphis\.usda\.gov(?:\/|$)/i.test(String(url || ''))) {
-    throw new Error('USDA adapter refused a non-APHIS or non-HTTPS URL.');
-  }
+  var value = String(url || '');
+  var isAphisPage = /^https:\/\/www\.aphis\.usda\.gov(?:\/|$)/i.test(value);
+  var isTableauCsv = /^https:\/\/publicdashboards\.dl\.usda\.gov\/t\/MRP_PUB\/views\/[A-Za-z0-9_.%~-]+\/[A-Za-z0-9_.%~-]+\.csv(?:\?|$)/i.test(value);
+  if (isAphisPage || isTableauCsv) return;
+  throw new Error('USDA adapter refused a non-approved or non-HTTPS URL.');
 }
